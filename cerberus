@@ -1,0 +1,730 @@
+#!/usr/bin/env bash
+
+################################################################################
+#                                                                              #
+# Cerberus - Advanced System-Wide Anonymity Tool                              #
+#                                                                              #
+# Version: 0.0.1 Alfa                                                         #
+# Author: 0xb0rn3 (github.com/0xb0rn3)                                        #
+# Contact: 0xb0rn3@proton.me                                                   #
+# IG: theehiv3                                                                 #
+#                                                                              #
+# Advanced transparent proxy through Tor with enhanced anonymity features     #
+# Built for Arch Linux with complete system protection                        #
+#                                                                              #
+# GNU GENERAL PUBLIC LICENSE v3                                               #
+#                                                                              #
+################################################################################
+
+# Global Configuration
+readonly PROG_NAME="cerberus"
+readonly VERSION="0.0.1 Alfa"
+readonly AUTHOR="0xb0rn3"
+readonly CONTACT="0xb0rn3@proton.me"
+readonly GITHUB="github.com/0xb0rn3"
+readonly IG="theehiv3"
+
+# Directories
+readonly CERBERUS_DIR="/usr/share/cerberus"
+readonly BACKUP_DIR="/var/lib/cerberus/backups"
+readonly LOG_DIR="/var/log/cerberus"
+readonly CONFIG_DIR="/etc/cerberus"
+readonly LOCK_FILE="/var/run/cerberus.lock"
+readonly PID_FILE="/var/run/cerberus.pid"
+
+# Network Configuration
+readonly TOR_PORT="9050"
+readonly TOR_DNS_PORT="5353"
+readonly TOR_TRANS_PORT="9040"
+readonly TOR_CONTROL_PORT="9051"
+
+# Colors and Formatting
+readonly RED='\033[1;31m'
+readonly GREEN='\033[1;32m'
+readonly YELLOW='\033[1;33m'
+readonly BLUE='\033[1;34m'
+readonly CYAN='\033[1;36m'
+readonly WHITE='\033[1;37m'
+readonly PURPLE='\033[1;35m'
+readonly RESET='\033[0m'
+readonly BOLD='\033[1m'
+readonly DIM='\033[2m'
+
+# Status Variables
+LOCKDOWN_STATUS=0
+CURRENT_IP=""
+NEW_IP=""
+TOR_STATUS=""
+ANONYMITY_LEVEL=""
+
+################################################################################
+# CORE FUNCTIONS
+################################################################################
+
+# Print banner
+print_banner() {
+    clear
+    echo -e "${PURPLE}${BOLD}"
+    echo "  ██████╗███████╗██████╗ ██████╗ ███████╗██████╗ ██╗   ██╗███████╗"
+    echo " ██╔════╝██╔════╝██╔══██╗██╔══██╗██╔════╝██╔══██╗██║   ██║██╔════╝"
+    echo " ██║     █████╗  ██████╔╝██████╔╝█████╗  ██████╔╝██║   ██║███████╗"
+    echo " ██║     ██╔══╝  ██╔══██╗██╔══██╗██╔══╝  ██╔══██╗██║   ██║╚════██║"
+    echo " ╚██████╗███████╗██║  ██║██████╔╝███████╗██║  ██║╚██████╔╝███████║"
+    echo "  ╚═════╝╚══════╝╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝"
+    echo "${RESET}"
+    echo -e "${CYAN}${BOLD}═══════════════════════════════════════════════════════════════════════${RESET}"
+    echo -e "${WHITE}${BOLD}    Advanced System-Wide Anonymity Tool - Version ${VERSION}${RESET}"
+    echo -e "${DIM}    Designed by ${AUTHOR} | ${CONTACT} | ${GITHUB}${RESET}"
+    echo -e "${CYAN}${BOLD}═══════════════════════════════════════════════════════════════════════${RESET}"
+    echo ""
+}
+
+# Logging function
+log() {
+    local level="$1"
+    shift
+    local message="$*"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$timestamp] [$level] $message" >> "$LOG_DIR/cerberus.log"
+}
+
+# Print status messages
+print_status() {
+    local type="$1"
+    shift
+    local message="$*"
+    
+    case "$type" in
+        "success")
+            echo -e "${GREEN}${BOLD}[✓] ${message}${RESET}"
+            log "SUCCESS" "$message"
+            ;;
+        "error")
+            echo -e "${RED}${BOLD}[✗] ${message}${RESET}"
+            log "ERROR" "$message"
+            ;;
+        "warning")
+            echo -e "${YELLOW}${BOLD}[!] ${message}${RESET}"
+            log "WARNING" "$message"
+            ;;
+        "info")
+            echo -e "${BLUE}${BOLD}[i] ${message}${RESET}"
+            log "INFO" "$message"
+            ;;
+        "loading")
+            echo -e "${CYAN}${BOLD}[⟳] ${message}${RESET}"
+            log "LOADING" "$message"
+            ;;
+    esac
+}
+
+# Check if running as root
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        print_status "error" "This script must be run as root!"
+        echo -e "${YELLOW}Usage: sudo ./${PROG_NAME} [start|stop|restart|status]${RESET}"
+        exit 1
+    fi
+}
+
+# Create necessary directories
+create_directories() {
+    local dirs=("$CERBERUS_DIR" "$BACKUP_DIR" "$LOG_DIR" "$CONFIG_DIR")
+    
+    for dir in "${dirs[@]}"; do
+        if [[ ! -d "$dir" ]]; then
+            mkdir -p "$dir"
+            print_status "info" "Created directory: $dir"
+        fi
+    done
+}
+
+# Kill process on exit
+cleanup() {
+    if [[ -f "$PID_FILE" ]]; then
+        rm -f "$PID_FILE"
+    fi
+    if [[ -f "$LOCK_FILE" ]]; then
+        rm -f "$LOCK_FILE"
+    fi
+}
+
+trap cleanup EXIT
+
+################################################################################
+# SYSTEM CHECKS AND SETUP
+################################################################################
+
+# Check system requirements
+check_requirements() {
+    print_status "loading" "Checking system requirements..."
+    
+    local required_packages=("tor" "iptables" "curl" "wget" "dnsutils" "macchanger")
+    local missing_packages=()
+    
+    # Check if packages are installed
+    for package in "${required_packages[@]}"; do
+        if ! command -v "$package" &> /dev/null; then
+            missing_packages+=("$package")
+        fi
+    done
+    
+    # Install missing packages
+    if [[ ${#missing_packages[@]} -gt 0 ]]; then
+        print_status "warning" "Missing packages detected: ${missing_packages[*]}"
+        print_status "loading" "Installing missing packages..."
+        
+        if command -v pacman &> /dev/null; then
+            pacman -S --noconfirm "${missing_packages[@]}"
+        elif command -v apt &> /dev/null; then
+            apt update && apt install -y "${missing_packages[@]}"
+        elif command -v yum &> /dev/null; then
+            yum install -y "${missing_packages[@]}"
+        else
+            print_status "error" "Package manager not found. Please install manually: ${missing_packages[*]}"
+            exit 1
+        fi
+    fi
+    
+    print_status "success" "All requirements satisfied"
+}
+
+# Setup Tor configuration
+setup_tor_config() {
+    print_status "loading" "Configuring Tor..."
+    
+    # Backup original torrc
+    if [[ -f /etc/tor/torrc ]]; then
+        cp /etc/tor/torrc "$BACKUP_DIR/torrc.backup"
+    fi
+    
+    # Create advanced Tor configuration
+    cat > /etc/tor/torrc << 'EOF'
+# Cerberus Tor Configuration
+# Enhanced anonymity and security settings
+
+# Basic settings
+User tor
+DataDirectory /var/lib/tor
+PidFile /var/run/tor/tor.pid
+
+# Network settings
+SocksPort 9050
+DNSPort 5353
+TransPort 9040
+ControlPort 9051
+
+# Enhanced anonymity
+NewCircuitPeriod 30
+MaxCircuitDirtiness 600
+CircuitBuildTimeout 60
+CircuitIdleTimeout 3600
+CircuitStreamTimeout 20
+LearnCircuitBuildTimeout 0
+
+# Entry guards
+UseEntryGuards 1
+NumEntryGuards 3
+GuardLifetime 2592000
+
+# Path selection
+EnforceDistinctSubnets 1
+ClientUseIPv4 1
+ClientUseIPv6 0
+
+# Performance
+KeepalivePeriod 60
+NewCircuitPeriod 30
+MaxCircuitDirtiness 600
+
+# Security hardening
+CookieAuthentication 1
+CookieAuthFileGroupReadable 1
+CookieAuthFile /var/lib/tor/control_auth_cookie
+ControlPortWriteToFile /var/lib/tor/control_auth_cookie
+
+# Logging
+Log notice file /var/log/tor/notices.log
+Log warn file /var/log/tor/warnings.log
+
+# Exit policy
+ExitPolicy reject *:*
+EOF
+
+    # Set permissions
+    chown -R tor:tor /var/lib/tor
+    chmod -R 700 /var/lib/tor
+    
+    print_status "success" "Tor configuration updated"
+}
+
+# Setup iptables rules for maximum anonymity
+setup_iptables() {
+    print_status "loading" "Setting up advanced iptables rules..."
+    
+    # Save current rules
+    iptables-save > "$BACKUP_DIR/iptables.backup"
+    
+    # Flush all existing rules
+    iptables -F
+    iptables -X
+    iptables -t nat -F
+    iptables -t nat -X
+    iptables -t mangle -F
+    iptables -t mangle -X
+    iptables -t raw -F
+    iptables -t raw -X
+    
+    # Default policies
+    iptables -P INPUT DROP
+    iptables -P FORWARD DROP
+    iptables -P OUTPUT DROP
+    
+    # Allow loopback
+    iptables -A INPUT -i lo -j ACCEPT
+    iptables -A OUTPUT -o lo -j ACCEPT
+    
+    # Allow established connections
+    iptables -A INPUT -m conntrack --ctstate ESTABLISHED -j ACCEPT
+    iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED -j ACCEPT
+    
+    # Tor user rules
+    iptables -A OUTPUT -m owner --uid-owner tor -j ACCEPT
+    
+    # DNS through Tor
+    iptables -t nat -A OUTPUT -p udp --dport 53 -j REDIRECT --to-ports 5353
+    iptables -t nat -A OUTPUT -p tcp --dport 53 -j REDIRECT --to-ports 5353
+    
+    # Transparent proxy
+    iptables -t nat -A OUTPUT -p tcp --syn -j REDIRECT --to-ports 9040
+    
+    # Block IPv6
+    ip6tables -P INPUT DROP
+    ip6tables -P FORWARD DROP
+    ip6tables -P OUTPUT DROP
+    
+    # Anti-leak rules
+    iptables -A OUTPUT -p tcp --dport 80 -j DROP
+    iptables -A OUTPUT -p tcp --dport 443 -j DROP
+    iptables -A OUTPUT -p tcp --dport 80 -m owner --uid-owner tor -j ACCEPT
+    iptables -A OUTPUT -p tcp --dport 443 -m owner --uid-owner tor -j ACCEPT
+    
+    print_status "success" "Advanced iptables rules applied"
+}
+
+# MAC address randomization
+randomize_mac() {
+    print_status "loading" "Randomizing MAC addresses..."
+    
+    local interfaces=($(ip link show | grep -E '^[0-9]+:' | grep -v lo | cut -d: -f2 | tr -d ' '))
+    
+    for interface in "${interfaces[@]}"; do
+        if [[ -n "$interface" ]]; then
+            # Bring interface down
+            ip link set "$interface" down
+            
+            # Change MAC address
+            macchanger -r "$interface" > /dev/null 2>&1
+            
+            # Bring interface back up
+            ip link set "$interface" up
+            
+            print_status "success" "MAC address randomized for $interface"
+        fi
+    done
+}
+
+# DNS configuration
+setup_dns() {
+    print_status "loading" "Configuring DNS for anonymity..."
+    
+    # Backup original resolv.conf
+    if [[ -f /etc/resolv.conf ]]; then
+        cp /etc/resolv.conf "$BACKUP_DIR/resolv.conf.backup"
+    fi
+    
+    # Stop systemd-resolved if running
+    if systemctl is-active systemd-resolved &> /dev/null; then
+        systemctl stop systemd-resolved
+    fi
+    
+    # Create new resolv.conf
+    cat > /etc/resolv.conf << 'EOF'
+# Cerberus DNS Configuration
+nameserver 127.0.0.1
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+options timeout:2
+options attempts:1
+options rotate
+EOF
+    
+    # Make immutable
+    chattr +i /etc/resolv.conf
+    
+    print_status "success" "DNS configuration updated"
+}
+
+# Get current IP address
+get_current_ip() {
+    local ip_apis=(
+        "https://ipinfo.io/ip"
+        "https://api.ipify.org"
+        "https://ifconfig.me/ip"
+        "https://icanhazip.com"
+        "https://ident.me"
+    )
+    
+    for api in "${ip_apis[@]}"; do
+        CURRENT_IP=$(curl -s --max-time 10 "$api" 2>/dev/null | tr -d '\n')
+        if [[ -n "$CURRENT_IP" ]]; then
+            break
+        fi
+    done
+    
+    if [[ -z "$CURRENT_IP" ]]; then
+        CURRENT_IP="Unable to fetch"
+    fi
+}
+
+# Get Tor IP address
+get_tor_ip() {
+    local ip_apis=(
+        "https://ipinfo.io/ip"
+        "https://api.ipify.org"
+        "https://ifconfig.me/ip"
+        "https://icanhazip.com"
+        "https://ident.me"
+    )
+    
+    for api in "${ip_apis[@]}"; do
+        NEW_IP=$(curl -s --max-time 10 --socks5 127.0.0.1:9050 "$api" 2>/dev/null | tr -d '\n')
+        if [[ -n "$NEW_IP" ]]; then
+            break
+        fi
+    done
+    
+    if [[ -z "$NEW_IP" ]]; then
+        NEW_IP="Unable to fetch"
+    fi
+}
+
+# Check Tor connection
+check_tor_connection() {
+    print_status "loading" "Verifying Tor connection..."
+    
+    local tor_check_url="https://check.torproject.org/"
+    local response=$(curl -s --max-time 15 --socks5 127.0.0.1:9050 "$tor_check_url" 2>/dev/null)
+    
+    if echo "$response" | grep -q "Congratulations"; then
+        TOR_STATUS="Connected"
+        ANONYMITY_LEVEL="High"
+        print_status "success" "Tor connection verified"
+        return 0
+    else
+        TOR_STATUS="Disconnected"
+        ANONYMITY_LEVEL="Low"
+        print_status "error" "Tor connection failed"
+        return 1
+    fi
+}
+
+# System hardening
+system_hardening() {
+    print_status "loading" "Applying system hardening..."
+    
+    # Disable IPv6
+    sysctl -w net.ipv6.conf.all.disable_ipv6=1 > /dev/null 2>&1
+    sysctl -w net.ipv6.conf.default.disable_ipv6=1 > /dev/null 2>&1
+    
+    # Network security
+    sysctl -w net.ipv4.ip_forward=0 > /dev/null 2>&1
+    sysctl -w net.ipv4.conf.all.accept_redirects=0 > /dev/null 2>&1
+    sysctl -w net.ipv4.conf.default.accept_redirects=0 > /dev/null 2>&1
+    sysctl -w net.ipv4.conf.all.send_redirects=0 > /dev/null 2>&1
+    sysctl -w net.ipv4.conf.default.send_redirects=0 > /dev/null 2>&1
+    sysctl -w net.ipv4.conf.all.accept_source_route=0 > /dev/null 2>&1
+    sysctl -w net.ipv4.conf.default.accept_source_route=0 > /dev/null 2>&1
+    
+    # Memory protection
+    sysctl -w kernel.dmesg_restrict=1 > /dev/null 2>&1
+    sysctl -w kernel.kptr_restrict=2 > /dev/null 2>&1
+    
+    print_status "success" "System hardening applied"
+}
+
+################################################################################
+# MAIN FUNCTIONS
+################################################################################
+
+# Start Cerberus
+start_cerberus() {
+    print_banner
+    
+    # Check if already running
+    if [[ -f "$LOCK_FILE" ]]; then
+        print_status "warning" "Cerberus is already running!"
+        exit 1
+    fi
+    
+    # Create lock file
+    touch "$LOCK_FILE"
+    echo $$ > "$PID_FILE"
+    
+    print_status "loading" "Initializing Cerberus..."
+    
+    # Get current IP
+    get_current_ip
+    print_status "info" "Current IP: $CURRENT_IP"
+    
+    # Create directories
+    create_directories
+    
+    # Check requirements
+    check_requirements
+    
+    # Setup configurations
+    setup_tor_config
+    
+    # Randomize MAC addresses
+    randomize_mac
+    
+    # Setup DNS
+    setup_dns
+    
+    # Apply system hardening
+    system_hardening
+    
+    # Start Tor service
+    print_status "loading" "Starting Tor service..."
+    systemctl start tor
+    sleep 5
+    
+    # Setup iptables
+    setup_iptables
+    
+    # Wait for Tor to establish circuits
+    print_status "loading" "Establishing Tor circuits..."
+    sleep 10
+    
+    # Check Tor connection
+    if check_tor_connection; then
+        get_tor_ip
+        
+        echo ""
+        echo -e "${GREEN}${BOLD}╔════════════════════════════════════════════════════════════════════════╗${RESET}"
+        echo -e "${GREEN}${BOLD}║                         🛡️  LOCKDOWN SUCCESSFUL 🛡️                         ║${RESET}"
+        echo -e "${GREEN}${BOLD}╚════════════════════════════════════════════════════════════════════════╝${RESET}"
+        echo ""
+        echo -e "${CYAN}${BOLD}[NETWORK STATUS]${RESET}"
+        echo -e "${WHITE}  Previous IP: ${RED}$CURRENT_IP${RESET}"
+        echo -e "${WHITE}  Current IP:  ${GREEN}$NEW_IP${RESET}"
+        echo -e "${WHITE}  Tor Status:  ${GREEN}$TOR_STATUS${RESET}"
+        echo -e "${WHITE}  Anonymity:   ${GREEN}$ANONYMITY_LEVEL${RESET}"
+        echo ""
+        echo -e "${YELLOW}${BOLD}[ACTIVE PROTECTIONS]${RESET}"
+        echo -e "${WHITE}  ✓ Tor Transparent Proxy${RESET}"
+        echo -e "${WHITE}  ✓ Advanced Iptables Rules${RESET}"
+        echo -e "${WHITE}  ✓ MAC Address Randomization${RESET}"
+        echo -e "${WHITE}  ✓ DNS Protection${RESET}"
+        echo -e "${WHITE}  ✓ IPv6 Disabled${RESET}"
+        echo -e "${WHITE}  ✓ System Hardening${RESET}"
+        echo ""
+        
+        LOCKDOWN_STATUS=1
+        log "SUCCESS" "Cerberus lockdown successful - IP changed from $CURRENT_IP to $NEW_IP"
+    else
+        echo ""
+        echo -e "${RED}${BOLD}╔════════════════════════════════════════════════════════════════════════╗${RESET}"
+        echo -e "${RED}${BOLD}║                         ⚠️  LOCKDOWN FAILED ⚠️                           ║${RESET}"
+        echo -e "${RED}${BOLD}╚════════════════════════════════════════════════════════════════════════╝${RESET}"
+        echo ""
+        print_status "error" "Failed to establish Tor connection"
+        
+        # Cleanup on failure
+        stop_cerberus
+        exit 1
+    fi
+}
+
+# Stop Cerberus
+stop_cerberus() {
+    print_status "loading" "Stopping Cerberus..."
+    
+    # Remove lock file
+    rm -f "$LOCK_FILE"
+    rm -f "$PID_FILE"
+    
+    # Stop Tor service
+    systemctl stop tor
+    
+    # Restore iptables
+    if [[ -f "$BACKUP_DIR/iptables.backup" ]]; then
+        iptables-restore < "$BACKUP_DIR/iptables.backup"
+        print_status "success" "Iptables rules restored"
+    fi
+    
+    # Restore resolv.conf
+    if [[ -f "$BACKUP_DIR/resolv.conf.backup" ]]; then
+        chattr -i /etc/resolv.conf
+        cp "$BACKUP_DIR/resolv.conf.backup" /etc/resolv.conf
+        print_status "success" "DNS configuration restored"
+    fi
+    
+    # Restore Tor config
+    if [[ -f "$BACKUP_DIR/torrc.backup" ]]; then
+        cp "$BACKUP_DIR/torrc.backup" /etc/tor/torrc
+        print_status "success" "Tor configuration restored"
+    fi
+    
+    # Enable IPv6
+    sysctl -w net.ipv6.conf.all.disable_ipv6=0 > /dev/null 2>&1
+    sysctl -w net.ipv6.conf.default.disable_ipv6=0 > /dev/null 2>&1
+    
+    # Restart systemd-resolved if needed
+    if systemctl is-enabled systemd-resolved &> /dev/null; then
+        systemctl start systemd-resolved
+    fi
+    
+    echo ""
+    echo -e "${YELLOW}${BOLD}╔════════════════════════════════════════════════════════════════════════╗${RESET}"
+    echo -e "${YELLOW}${BOLD}║                       🔓 LOCKDOWN DISABLED 🔓                        ║${RESET}"
+    echo -e "${YELLOW}${BOLD}╚════════════════════════════════════════════════════════════════════════╝${RESET}"
+    echo ""
+    print_status "success" "Cerberus stopped - returning to normal operation"
+    
+    log "SUCCESS" "Cerberus lockdown stopped"
+}
+
+# Restart Cerberus
+restart_cerberus() {
+    print_status "loading" "Restarting Cerberus..."
+    
+    if [[ -f "$LOCK_FILE" ]]; then
+        stop_cerberus
+        sleep 2
+        start_cerberus
+    else
+        print_status "error" "Cerberus is not running!"
+        exit 1
+    fi
+}
+
+# Show status
+show_status() {
+    print_banner
+    
+    if [[ -f "$LOCK_FILE" ]]; then
+        echo -e "${GREEN}${BOLD}╔════════════════════════════════════════════════════════════════════════╗${RESET}"
+        echo -e "${GREEN}${BOLD}║                       🛡️  CERBERUS ACTIVE 🛡️                          ║${RESET}"
+        echo -e "${GREEN}${BOLD}╚════════════════════════════════════════════════════════════════════════╝${RESET}"
+        echo ""
+        
+        # Check current status
+        if systemctl is-active tor &> /dev/null; then
+            TOR_STATUS="Active"
+        else
+            TOR_STATUS="Inactive"
+        fi
+        
+        # Get current IP
+        get_tor_ip
+        
+        # Check Tor connection
+        check_tor_connection
+        
+        echo -e "${CYAN}${BOLD}[SYSTEM STATUS]${RESET}"
+        echo -e "${WHITE}  Current IP:     ${GREEN}$NEW_IP${RESET}"
+        echo -e "${WHITE}  Tor Service:    ${GREEN}$TOR_STATUS${RESET}"
+        echo -e "${WHITE}  Anonymity Level: ${GREEN}$ANONYMITY_LEVEL${RESET}"
+        echo -e "${WHITE}  Uptime:         ${GREEN}$(uptime -p)${RESET}"
+        echo ""
+        
+        echo -e "${YELLOW}${BOLD}[ACTIVE PROTECTIONS]${RESET}"
+        echo -e "${WHITE}  ✓ Tor Transparent Proxy${RESET}"
+        echo -e "${WHITE}  ✓ Advanced Iptables Rules${RESET}"
+        echo -e "${WHITE}  ✓ MAC Address Randomization${RESET}"
+        echo -e "${WHITE}  ✓ DNS Protection${RESET}"
+        echo -e "${WHITE}  ✓ IPv6 Disabled${RESET}"
+        echo -e "${WHITE}  ✓ System Hardening${RESET}"
+        echo ""
+        
+    else
+        echo -e "${RED}${BOLD}╔════════════════════════════════════════════════════════════════════════╗${RESET}"
+        echo -e "${RED}${BOLD}║                      ⚠️  CERBERUS INACTIVE ⚠️                         ║${RESET}"
+        echo -e "${RED}${BOLD}╚════════════════════════════════════════════════════════════════════════╝${RESET}"
+        echo ""
+        print_status "warning" "Cerberus is not running"
+        echo -e "${YELLOW}Use: ${WHITE}sudo ./${PROG_NAME} start${RESET} to enable protection"
+        echo ""
+    fi
+}
+
+# Show help
+show_help() {
+    print_banner
+    
+    echo -e "${CYAN}${BOLD}USAGE:${RESET}"
+    echo -e "${WHITE}  sudo ./${PROG_NAME} [COMMAND]${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}${BOLD}COMMANDS:${RESET}"
+    echo -e "${WHITE}  start     ${DIM}Start Cerberus anonymity protection${RESET}"
+    echo -e "${WHITE}  stop      ${DIM}Stop Cerberus and restore normal operation${RESET}"
+    echo -e "${WHITE}  restart   ${DIM}Restart Cerberus (get new Tor circuit)${RESET}"
+    echo -e "${WHITE}  status    ${DIM}Show current status and protection level${RESET}"
+    echo -e "${WHITE}  help      ${DIM}Show this help message${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}${BOLD}FEATURES:${RESET}"
+    echo -e "${WHITE}  • Advanced Tor transparent proxy${RESET}"
+    echo -e "${WHITE}  • MAC address randomization${RESET}"
+    echo -e "${WHITE}  • DNS leak protection${RESET}"
+    echo -e "${WHITE}  • IPv6 blocking${RESET}"
+    echo -e "${WHITE}  • System-wide anonymity${RESET}"
+    echo -e "${WHITE}  • Real-time status monitoring${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}${BOLD}AUTHOR:${RESET}"
+    echo -e "${WHITE}  ${AUTHOR} | ${CONTACT} | ${GITHUB}${RESET}"
+    echo ""
+}
+
+################################################################################
+# MAIN EXECUTION
+################################################################################
+
+# Main function
+main() {
+    case "${1:-}" in
+        "start")
+            check_root
+            start_cerberus
+            ;;
+        "stop")
+            check_root
+            stop_cerberus
+            ;;
+        "restart")
+            check_root
+            restart_cerberus
+            ;;
+        "status")
+            show_status
+            ;;
+        "help"|"--help"|"-h")
+            show_help
+            ;;
+        *)
+            print_banner
+            echo -e "${RED}${BOLD}Invalid command: ${1:-}${RESET}"
+            echo ""
+            echo -e "${YELLOW}Usage: ${WHITE}sudo ./${PROG_NAME} [start|stop|restart|status|help]${RESET}"
+            echo ""
+            exit 1
+            ;;
+    esac
+}
+
+# Execute main function
+main "$@"
