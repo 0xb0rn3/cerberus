@@ -193,12 +193,16 @@ check_requirements() {
 setup_tor_config() {
     print_status "loading" "Configuring Tor..."
     
+    # Create necessary directories first
+    mkdir -p /var/lib/tor
+    mkdir -p /var/log/tor
+    
     # Backup original torrc
     if [[ -f /etc/tor/torrc ]]; then
         cp /etc/tor/torrc "$BACKUP_DIR/torrc.backup"
     fi
     
-    # Create advanced Tor configuration
+    # Create fixed Tor configuration
     cat > /etc/tor/torrc << 'EOF'
 # Cerberus Tor Configuration
 # Enhanced anonymity and security settings
@@ -212,7 +216,6 @@ PidFile /var/run/tor/tor.pid
 SocksPort 9050
 DNSPort 5353
 TransPort 9040
-ControlPort 9051
 
 # Enhanced anonymity
 NewCircuitPeriod 30
@@ -234,26 +237,25 @@ ClientUseIPv6 0
 
 # Performance
 KeepalivePeriod 60
-NewCircuitPeriod 30
-MaxCircuitDirtiness 600
 
-# Security hardening
-CookieAuthentication 1
-CookieAuthFileGroupReadable 1
-CookieAuthFile /var/lib/tor/control_auth_cookie
-ControlPortWriteToFile /var/lib/tor/control_auth_cookie
+# Exit policy
+ExitPolicy reject *:*
 
 # Logging
 Log notice file /var/log/tor/notices.log
 Log warn file /var/log/tor/warnings.log
-
-# Exit policy
-ExitPolicy reject *:*
 EOF
 
-    # Set permissions
-    chown -R tor:tor /var/lib/tor
+    # Set proper permissions
+    chown -R tor:tor /var/lib/tor /var/log/tor
     chmod -R 700 /var/lib/tor
+    chmod -R 755 /var/log/tor
+    chmod 644 /etc/tor/torrc
+    
+    # Create run directory if it doesn't exist
+    mkdir -p /var/run/tor
+    chown tor:tor /var/run/tor
+    chmod 755 /var/run/tor
     
     print_status "success" "Tor configuration updated"
 }
@@ -495,21 +497,35 @@ start_cerberus() {
     # Apply system hardening
     system_hardening
     
-    # Start Tor service
+        # Start Tor service with better error handling
     print_status "loading" "Starting Tor service..."
-    systemctl start tor
-    sleep 5
     
-    # Setup iptables
-    setup_iptables
+    # Make sure tor service is stopped first
+    systemctl stop tor 2>/dev/null
     
-    # Wait for Tor to establish circuits
-    print_status "loading" "Establishing Tor circuits..."
-    sleep 10
+    # Wait a moment
+    sleep 2
     
-    # Check Tor connection
-    if check_tor_connection; then
-        get_tor_ip
+    # Start tor service
+    if systemctl start tor; then
+        print_status "success" "Tor service started successfully"
+        # Wait longer for Tor to initialize
+        sleep 15
+    else
+        print_status "error" "Failed to start Tor service"
+        print_status "info" "Checking Tor service status..."
+        systemctl status tor
+        print_status "info" "Checking Tor logs..."
+        journalctl -u tor --no-pager -n 20
+        
+        # Try to start tor directly for debugging
+        print_status "info" "Attempting to start Tor directly..."
+        sudo -u tor tor -f /etc/tor/torrc --verify-config
+        
+        # Cleanup and exit
+        stop_cerberus
+        exit 1
+    fi
         
         echo ""
         echo -e "${GREEN}${BOLD}╔════════════════════════════════════════════════════════════════════════╗${RESET}"
