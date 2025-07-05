@@ -1,28 +1,16 @@
 #!/usr/bin/env bash
 
-################################################################################
-#                                                                              #
-# Cerberus - Advanced System-Wide Anonymity Tool                              #
-#                                                                              #
-# Version: 0.0.1 Alfa                                                         #
-# Author: 0xb0rn3 (github.com/0xb0rn3)                                        #
-# Contact: 0xb0rn3@proton.me                                                   #
-# IG: theehiv3                                                                 #
-#                                                                              #
-# Advanced transparent proxy through Tor with enhanced anonymity features     #
-# Built for Arch Linux with complete system protection                        #
-#                                                                              #
-# GNU GENERAL PUBLIC LICENSE v3                                               #
-#                                                                              #
-################################################################################
+# Cerberus - Advanced System-Wide Anonymity Tool
+# Version: 0.0.1 stable
+# Author: 0xb0rn3 (github.com/0xb0rn3)
+# Contact: 0xb0rn3@proton.me
 
 # Global Configuration
 readonly PROG_NAME="cerberus"
-readonly VERSION="0.0.1 Alfa"
+readonly VERSION="0.0.1 stable"
 readonly AUTHOR="0xb0rn3"
 readonly CONTACT="0xb0rn3@proton.me"
 readonly GITHUB="github.com/0xb0rn3"
-readonly IG="theehiv3"
 
 # Directories
 readonly CERBERUS_DIR="/usr/share/cerberus"
@@ -57,10 +45,6 @@ NEW_IP=""
 TOR_STATUS=""
 ANONYMITY_LEVEL=""
 
-################################################################################
-# CORE FUNCTIONS
-################################################################################
-
 # Print banner
 print_banner() {
     clear
@@ -85,6 +69,7 @@ log() {
     shift
     local message="$*"
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    mkdir -p "$LOG_DIR"
     echo "[$timestamp] [$level] $message" >> "$LOG_DIR/cerberus.log"
 }
 
@@ -137,6 +122,19 @@ create_directories() {
             print_status "info" "Created directory: $dir"
         fi
     done
+    
+    # Create tor directories with proper permissions
+    mkdir -p /var/lib/tor /var/log/tor /var/run/tor
+    
+    # Create tor user if doesn't exist
+    if ! id -u tor &>/dev/null; then
+        useradd -r -s /bin/false -d /var/lib/tor -c "Tor anonymity user" tor
+    fi
+    
+    # Set proper ownership
+    chown -R tor:tor /var/lib/tor /var/log/tor /var/run/tor
+    chmod 700 /var/lib/tor
+    chmod 755 /var/log/tor /var/run/tor
 }
 
 # Kill process on exit
@@ -151,20 +149,16 @@ cleanup() {
 
 trap cleanup EXIT
 
-################################################################################
-# SYSTEM CHECKS AND SETUP
-################################################################################
-
 # Check system requirements
 check_requirements() {
     print_status "loading" "Checking system requirements..."
     
-    local required_packages=("tor" "iptables" "curl" "wget" "dnsutils" "macchanger")
+    local required_packages=("tor" "iptables" "curl" "dnsutils")
     local missing_packages=()
     
     # Check if packages are installed
     for package in "${required_packages[@]}"; do
-        if ! command -v "$package" &> /dev/null; then
+        if ! command -v "$package" &> /dev/null && ! dpkg -l | grep -q "^ii  $package " && ! rpm -q "$package" &> /dev/null; then
             missing_packages+=("$package")
         fi
     done
@@ -180,6 +174,8 @@ check_requirements() {
             apt update && apt install -y "${missing_packages[@]}"
         elif command -v yum &> /dev/null; then
             yum install -y "${missing_packages[@]}"
+        elif command -v dnf &> /dev/null; then
+            dnf install -y "${missing_packages[@]}"
         else
             print_status "error" "Package manager not found. Please install manually: ${missing_packages[*]}"
             exit 1
@@ -193,79 +189,54 @@ check_requirements() {
 setup_tor_config() {
     print_status "loading" "Configuring Tor..."
     
-    # Create necessary directories first
-    mkdir -p /var/lib/tor
-    mkdir -p /var/log/tor
-    
     # Backup original torrc
     if [[ -f /etc/tor/torrc ]]; then
         cp /etc/tor/torrc "$BACKUP_DIR/torrc.backup"
     fi
     
-    # Create fixed Tor configuration
+    # Create working Tor configuration
     cat > /etc/tor/torrc << 'EOF'
-# Cerberus Tor Configuration
-# Enhanced anonymity and security settings
-
-# Basic settings
-User tor
 DataDirectory /var/lib/tor
 PidFile /var/run/tor/tor.pid
 
-# Network settings
 SocksPort 9050
 DNSPort 5353
 TransPort 9040
 
-# Enhanced anonymity
 NewCircuitPeriod 30
 MaxCircuitDirtiness 600
 CircuitBuildTimeout 60
-CircuitIdleTimeout 3600
 CircuitStreamTimeout 20
 LearnCircuitBuildTimeout 0
 
-# Entry guards
 UseEntryGuards 1
 NumEntryGuards 3
-GuardLifetime 2592000
 
-# Path selection
 EnforceDistinctSubnets 1
 ClientUseIPv4 1
 ClientUseIPv6 0
 
-# Performance
 KeepalivePeriod 60
-
-# Exit policy
 ExitPolicy reject *:*
 
-# Logging
 Log notice file /var/log/tor/notices.log
 Log warn file /var/log/tor/warnings.log
 EOF
 
     # Set proper permissions
-    chown -R tor:tor /var/lib/tor /var/log/tor
-    chmod -R 700 /var/lib/tor
-    chmod -R 755 /var/log/tor
     chmod 644 /etc/tor/torrc
-    
-    # Create run directory if it doesn't exist
-    mkdir -p /var/run/tor
-    chown tor:tor /var/run/tor
-    chmod 755 /var/run/tor
     
     print_status "success" "Tor configuration updated"
 }
 
-# Setup iptables rules for maximum anonymity
+# Setup iptables rules
 setup_iptables() {
-    print_status "loading" "Setting up advanced iptables rules..."
+    print_status "loading" "Setting up iptables rules..."
     
     # Save current rules
-    iptables-save > "$BACKUP_DIR/iptables.backup"
+    if command -v iptables-save &> /dev/null; then
+        iptables-save > "$BACKUP_DIR/iptables.backup"
+    fi
     
     # Flush all existing rules
     iptables -F
@@ -274,62 +245,59 @@ setup_iptables() {
     iptables -t nat -X
     iptables -t mangle -F
     iptables -t mangle -X
-    iptables -t raw -F
-    iptables -t raw -X
     
-    # Default policies
+    # Set default policies
     iptables -P INPUT DROP
     iptables -P FORWARD DROP
-    iptables -P OUTPUT DROP
+    iptables -P OUTPUT ACCEPT
     
     # Allow loopback
     iptables -A INPUT -i lo -j ACCEPT
     iptables -A OUTPUT -o lo -j ACCEPT
     
     # Allow established connections
-    iptables -A INPUT -m conntrack --ctstate ESTABLISHED -j ACCEPT
-    iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED -j ACCEPT
+    iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
     
-    # Tor user rules
+    # Allow tor user connections
     iptables -A OUTPUT -m owner --uid-owner tor -j ACCEPT
     
-    # DNS through Tor
+    # Redirect DNS
     iptables -t nat -A OUTPUT -p udp --dport 53 -j REDIRECT --to-ports 5353
     iptables -t nat -A OUTPUT -p tcp --dport 53 -j REDIRECT --to-ports 5353
     
-    # Transparent proxy
+    # Redirect TCP traffic through Tor
     iptables -t nat -A OUTPUT -p tcp --syn -j REDIRECT --to-ports 9040
     
-    # Block IPv6
-    ip6tables -P INPUT DROP
-    ip6tables -P FORWARD DROP
-    ip6tables -P OUTPUT DROP
+    # Block IPv6 if available
+    if command -v ip6tables &> /dev/null; then
+        ip6tables -P INPUT DROP
+        ip6tables -P FORWARD DROP
+        ip6tables -P OUTPUT DROP
+    fi
     
-    # Anti-leak rules
-    iptables -A OUTPUT -p tcp --dport 80 -j DROP
-    iptables -A OUTPUT -p tcp --dport 443 -j DROP
-    iptables -A OUTPUT -p tcp --dport 80 -m owner --uid-owner tor -j ACCEPT
-    iptables -A OUTPUT -p tcp --dport 443 -m owner --uid-owner tor -j ACCEPT
-    
-    print_status "success" "Advanced iptables rules applied"
+    print_status "success" "Iptables rules applied"
 }
 
 # MAC address randomization
 randomize_mac() {
     print_status "loading" "Randomizing MAC addresses..."
     
-    local interfaces=($(ip link show | grep -E '^[0-9]+:' | grep -v lo | cut -d: -f2 | tr -d ' '))
+    # Get network interfaces excluding loopback
+    local interfaces=($(ip link show | awk -F': ' '/^[0-9]+: [^lo]/ {print $2}' | grep -v '^lo$'))
     
     for interface in "${interfaces[@]}"; do
-        if [[ -n "$interface" ]]; then
-            # Bring interface down
-            ip link set "$interface" down
+        if [[ -n "$interface" && "$interface" != "lo" ]]; then
+            # Generate random MAC
+            local new_mac=$(printf "02:%02x:%02x:%02x:%02x:%02x" $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)))
             
-            # Change MAC address
-            macchanger -r "$interface" > /dev/null 2>&1
+            # Bring interface down
+            ip link set "$interface" down 2>/dev/null
+            
+            # Set new MAC address
+            ip link set dev "$interface" address "$new_mac" 2>/dev/null
             
             # Bring interface back up
-            ip link set "$interface" up
+            ip link set "$interface" up 2>/dev/null
             
             print_status "success" "MAC address randomized for $interface"
         fi
@@ -348,21 +316,20 @@ setup_dns() {
     # Stop systemd-resolved if running
     if systemctl is-active systemd-resolved &> /dev/null; then
         systemctl stop systemd-resolved
+        systemctl disable systemd-resolved
     fi
     
     # Create new resolv.conf
     cat > /etc/resolv.conf << 'EOF'
-# Cerberus DNS Configuration
 nameserver 127.0.0.1
 nameserver 1.1.1.1
 nameserver 8.8.8.8
 options timeout:2
 options attempts:1
-options rotate
 EOF
     
-    # Make immutable
-    chattr +i /etc/resolv.conf
+    # Protect from modification
+    chattr +i /etc/resolv.conf 2>/dev/null || true
     
     print_status "success" "DNS configuration updated"
 }
@@ -373,13 +340,11 @@ get_current_ip() {
         "https://ipinfo.io/ip"
         "https://api.ipify.org"
         "https://ifconfig.me/ip"
-        "https://icanhazip.com"
-        "https://ident.me"
     )
     
     for api in "${ip_apis[@]}"; do
-        CURRENT_IP=$(curl -s --max-time 10 "$api" 2>/dev/null | tr -d '\n')
-        if [[ -n "$CURRENT_IP" ]]; then
+        CURRENT_IP=$(timeout 10 curl -s "$api" 2>/dev/null | tr -d '\n' | head -1)
+        if [[ -n "$CURRENT_IP" && "$CURRENT_IP" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
             break
         fi
     done
@@ -395,13 +360,11 @@ get_tor_ip() {
         "https://ipinfo.io/ip"
         "https://api.ipify.org"
         "https://ifconfig.me/ip"
-        "https://icanhazip.com"
-        "https://ident.me"
     )
     
     for api in "${ip_apis[@]}"; do
-        NEW_IP=$(curl -s --max-time 10 --socks5 127.0.0.1:9050 "$api" 2>/dev/null | tr -d '\n')
-        if [[ -n "$NEW_IP" ]]; then
+        NEW_IP=$(timeout 10 curl -s --socks5 127.0.0.1:9050 "$api" 2>/dev/null | tr -d '\n' | head -1)
+        if [[ -n "$NEW_IP" && "$NEW_IP" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
             break
         fi
     done
@@ -415,8 +378,7 @@ get_tor_ip() {
 check_tor_connection() {
     print_status "loading" "Verifying Tor connection..."
     
-    local tor_check_url="https://check.torproject.org/"
-    local response=$(curl -s --max-time 15 --socks5 127.0.0.1:9050 "$tor_check_url" 2>/dev/null)
+    local response=$(timeout 15 curl -s --socks5 127.0.0.1:9050 "https://check.torproject.org/" 2>/dev/null)
     
     if echo "$response" | grep -q "Congratulations"; then
         TOR_STATUS="Connected"
@@ -435,11 +397,7 @@ check_tor_connection() {
 system_hardening() {
     print_status "loading" "Applying system hardening..."
     
-    # Disable IPv6
-    sysctl -w net.ipv6.conf.all.disable_ipv6=1 > /dev/null 2>&1
-    sysctl -w net.ipv6.conf.default.disable_ipv6=1 > /dev/null 2>&1
-    
-    # Network security
+    # Network security settings
     sysctl -w net.ipv4.ip_forward=0 > /dev/null 2>&1
     sysctl -w net.ipv4.conf.all.accept_redirects=0 > /dev/null 2>&1
     sysctl -w net.ipv4.conf.default.accept_redirects=0 > /dev/null 2>&1
@@ -448,16 +406,16 @@ system_hardening() {
     sysctl -w net.ipv4.conf.all.accept_source_route=0 > /dev/null 2>&1
     sysctl -w net.ipv4.conf.default.accept_source_route=0 > /dev/null 2>&1
     
+    # Disable IPv6
+    sysctl -w net.ipv6.conf.all.disable_ipv6=1 > /dev/null 2>&1
+    sysctl -w net.ipv6.conf.default.disable_ipv6=1 > /dev/null 2>&1
+    
     # Memory protection
     sysctl -w kernel.dmesg_restrict=1 > /dev/null 2>&1
     sysctl -w kernel.kptr_restrict=2 > /dev/null 2>&1
     
     print_status "success" "System hardening applied"
 }
-
-################################################################################
-# MAIN FUNCTIONS
-################################################################################
 
 # Start Cerberus
 start_cerberus() {
@@ -497,23 +455,37 @@ start_cerberus() {
     # Apply system hardening
     system_hardening
     
-    # Start Tor service with better error handling
+    # Start Tor service
     print_status "loading" "Starting Tor service..."
     
-    # Make sure tor service is stopped first
+    # Stop any existing tor processes
     systemctl stop tor 2>/dev/null
-    
-    # Wait a moment
-    sleep 2
+    killall tor 2>/dev/null
     
     # Start tor service
-    if systemctl start tor; then
+    systemctl start tor
+    
+    # Wait for Tor to start
+    local tor_started=0
+    for i in {1..30}; do
+        if systemctl is-active tor &> /dev/null; then
+            tor_started=1
+            break
+        fi
+        sleep 1
+    done
+    
+    if [[ $tor_started -eq 1 ]]; then
         print_status "success" "Tor service started successfully"
-        # Wait longer for Tor to initialize
-        sleep 15
+        
+        # Wait for Tor to establish circuits
+        sleep 10
         
         # Setup iptables after Tor is running
         setup_iptables
+        
+        # Additional wait for circuit establishment
+        sleep 5
         
         # Get new IP address through Tor
         get_tor_ip
@@ -543,29 +515,18 @@ start_cerberus() {
             LOCKDOWN_STATUS=1
             log "SUCCESS" "Cerberus lockdown successful - IP changed from $CURRENT_IP to $NEW_IP"
         else
-            echo ""
-            echo -e "${RED}${BOLD}╔════════════════════════════════════════════════════════════════════════╗${RESET}"
-            echo -e "${RED}${BOLD}║                         ⚠️  LOCKDOWN FAILED ⚠️                           ║${RESET}"
-            echo -e "${RED}${BOLD}╚════════════════════════════════════════════════════════════════════════╝${RESET}"
-            echo ""
-            print_status "error" "Failed to establish Tor connection"
-            
-            # Cleanup on failure
+            print_status "error" "Tor connection verification failed"
             stop_cerberus
             exit 1
         fi
     else
         print_status "error" "Failed to start Tor service"
         print_status "info" "Checking Tor service status..."
-        systemctl status tor
+        systemctl status tor --no-pager
+        
         print_status "info" "Checking Tor logs..."
-        journalctl -u tor --no-pager -n 20
+        journalctl -u tor --no-pager -n 10
         
-        # Try to start tor directly for debugging
-        print_status "info" "Attempting to start Tor directly..."
-        sudo -u tor tor -f /etc/tor/torrc --verify-config
-        
-        # Cleanup and exit
         stop_cerberus
         exit 1
     fi
@@ -580,17 +541,27 @@ stop_cerberus() {
     rm -f "$PID_FILE"
     
     # Stop Tor service
-    systemctl stop tor
+    systemctl stop tor 2>/dev/null
     
     # Restore iptables
     if [[ -f "$BACKUP_DIR/iptables.backup" ]]; then
-        iptables-restore < "$BACKUP_DIR/iptables.backup"
+        iptables-restore < "$BACKUP_DIR/iptables.backup" 2>/dev/null
         print_status "success" "Iptables rules restored"
+    else
+        # Basic restore
+        iptables -F
+        iptables -X
+        iptables -t nat -F
+        iptables -t nat -X
+        iptables -P INPUT ACCEPT
+        iptables -P FORWARD ACCEPT
+        iptables -P OUTPUT ACCEPT
+        print_status "success" "Iptables rules reset"
     fi
     
     # Restore resolv.conf
     if [[ -f "$BACKUP_DIR/resolv.conf.backup" ]]; then
-        chattr -i /etc/resolv.conf
+        chattr -i /etc/resolv.conf 2>/dev/null || true
         cp "$BACKUP_DIR/resolv.conf.backup" /etc/resolv.conf
         print_status "success" "DNS configuration restored"
     fi
@@ -605,8 +576,9 @@ stop_cerberus() {
     sysctl -w net.ipv6.conf.all.disable_ipv6=0 > /dev/null 2>&1
     sysctl -w net.ipv6.conf.default.disable_ipv6=0 > /dev/null 2>&1
     
-    # Restart systemd-resolved if needed
+    # Restart systemd-resolved if it was running
     if systemctl is-enabled systemd-resolved &> /dev/null; then
+        systemctl enable systemd-resolved
         systemctl start systemd-resolved
     fi
     
@@ -626,7 +598,7 @@ restart_cerberus() {
     
     if [[ -f "$LOCK_FILE" ]]; then
         stop_cerberus
-        sleep 2
+        sleep 3
         start_cerberus
     else
         print_status "error" "Cerberus is not running!"
@@ -661,7 +633,7 @@ show_status() {
         echo -e "${WHITE}  Current IP:     ${GREEN}$NEW_IP${RESET}"
         echo -e "${WHITE}  Tor Service:    ${GREEN}$TOR_STATUS${RESET}"
         echo -e "${WHITE}  Anonymity Level: ${GREEN}$ANONYMITY_LEVEL${RESET}"
-        echo -e "${WHITE}  Uptime:         ${GREEN}$(uptime -p)${RESET}"
+        echo -e "${WHITE}  Uptime:         ${GREEN}$(uptime -p 2>/dev/null || echo "Unknown")${RESET}"
         echo ""
         
         echo -e "${YELLOW}${BOLD}[ACTIVE PROTECTIONS]${RESET}"
@@ -713,10 +685,6 @@ show_help() {
     echo -e "${WHITE}  ${AUTHOR} | ${CONTACT} | ${GITHUB}${RESET}"
     echo ""
 }
-
-################################################################################
-# MAIN EXECUTION
-################################################################################
 
 # Main function
 main() {
