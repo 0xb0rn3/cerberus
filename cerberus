@@ -497,7 +497,7 @@ start_cerberus() {
     # Apply system hardening
     system_hardening
     
-        # Start Tor service with better error handling
+    # Start Tor service with better error handling
     print_status "loading" "Starting Tor service..."
     
     # Make sure tor service is stopped first
@@ -511,6 +511,49 @@ start_cerberus() {
         print_status "success" "Tor service started successfully"
         # Wait longer for Tor to initialize
         sleep 15
+        
+        # Setup iptables after Tor is running
+        setup_iptables
+        
+        # Get new IP address through Tor
+        get_tor_ip
+        
+        # Verify Tor connection
+        if check_tor_connection; then
+            echo ""
+            echo -e "${GREEN}${BOLD}╔════════════════════════════════════════════════════════════════════════╗${RESET}"
+            echo -e "${GREEN}${BOLD}║                         🛡️  LOCKDOWN SUCCESSFUL 🛡️                         ║${RESET}"
+            echo -e "${GREEN}${BOLD}╚════════════════════════════════════════════════════════════════════════╝${RESET}"
+            echo ""
+            echo -e "${CYAN}${BOLD}[NETWORK STATUS]${RESET}"
+            echo -e "${WHITE}  Previous IP: ${RED}$CURRENT_IP${RESET}"
+            echo -e "${WHITE}  Current IP:  ${GREEN}$NEW_IP${RESET}"
+            echo -e "${WHITE}  Tor Status:  ${GREEN}$TOR_STATUS${RESET}"
+            echo -e "${WHITE}  Anonymity:   ${GREEN}$ANONYMITY_LEVEL${RESET}"
+            echo ""
+            echo -e "${YELLOW}${BOLD}[ACTIVE PROTECTIONS]${RESET}"
+            echo -e "${WHITE}  ✓ Tor Transparent Proxy${RESET}"
+            echo -e "${WHITE}  ✓ Advanced Iptables Rules${RESET}"
+            echo -e "${WHITE}  ✓ MAC Address Randomization${RESET}"
+            echo -e "${WHITE}  ✓ DNS Protection${RESET}"
+            echo -e "${WHITE}  ✓ IPv6 Disabled${RESET}"
+            echo -e "${WHITE}  ✓ System Hardening${RESET}"
+            echo ""
+            
+            LOCKDOWN_STATUS=1
+            log "SUCCESS" "Cerberus lockdown successful - IP changed from $CURRENT_IP to $NEW_IP"
+        else
+            echo ""
+            echo -e "${RED}${BOLD}╔════════════════════════════════════════════════════════════════════════╗${RESET}"
+            echo -e "${RED}${BOLD}║                         ⚠️  LOCKDOWN FAILED ⚠️                           ║${RESET}"
+            echo -e "${RED}${BOLD}╚════════════════════════════════════════════════════════════════════════╝${RESET}"
+            echo ""
+            print_status "error" "Failed to establish Tor connection"
+            
+            # Cleanup on failure
+            stop_cerberus
+            exit 1
+        fi
     else
         print_status "error" "Failed to start Tor service"
         print_status "info" "Checking Tor service status..."
@@ -523,41 +566,6 @@ start_cerberus() {
         sudo -u tor tor -f /etc/tor/torrc --verify-config
         
         # Cleanup and exit
-        stop_cerberus
-        exit 1
-    fi
-        
-        echo ""
-        echo -e "${GREEN}${BOLD}╔════════════════════════════════════════════════════════════════════════╗${RESET}"
-        echo -e "${GREEN}${BOLD}║                         🛡️  LOCKDOWN SUCCESSFUL 🛡️                         ║${RESET}"
-        echo -e "${GREEN}${BOLD}╚════════════════════════════════════════════════════════════════════════╝${RESET}"
-        echo ""
-        echo -e "${CYAN}${BOLD}[NETWORK STATUS]${RESET}"
-        echo -e "${WHITE}  Previous IP: ${RED}$CURRENT_IP${RESET}"
-        echo -e "${WHITE}  Current IP:  ${GREEN}$NEW_IP${RESET}"
-        echo -e "${WHITE}  Tor Status:  ${GREEN}$TOR_STATUS${RESET}"
-        echo -e "${WHITE}  Anonymity:   ${GREEN}$ANONYMITY_LEVEL${RESET}"
-        echo ""
-        echo -e "${YELLOW}${BOLD}[ACTIVE PROTECTIONS]${RESET}"
-        echo -e "${WHITE}  ✓ Tor Transparent Proxy${RESET}"
-        echo -e "${WHITE}  ✓ Advanced Iptables Rules${RESET}"
-        echo -e "${WHITE}  ✓ MAC Address Randomization${RESET}"
-        echo -e "${WHITE}  ✓ DNS Protection${RESET}"
-        echo -e "${WHITE}  ✓ IPv6 Disabled${RESET}"
-        echo -e "${WHITE}  ✓ System Hardening${RESET}"
-        echo ""
-        
-        LOCKDOWN_STATUS=1
-        log "SUCCESS" "Cerberus lockdown successful - IP changed from $CURRENT_IP to $NEW_IP"
-    else
-        echo ""
-        echo -e "${RED}${BOLD}╔════════════════════════════════════════════════════════════════════════╗${RESET}"
-        echo -e "${RED}${BOLD}║                         ⚠️  LOCKDOWN FAILED ⚠️                           ║${RESET}"
-        echo -e "${RED}${BOLD}╚════════════════════════════════════════════════════════════════════════╝${RESET}"
-        echo ""
-        print_status "error" "Failed to establish Tor connection"
-        
-        # Cleanup on failure
         stop_cerberus
         exit 1
     fi
