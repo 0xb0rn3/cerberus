@@ -1,0 +1,14 @@
+[Unit]
+Description=Cerberus Pandora RAM cleaner
+After=umount.target
+Before=shutdown.target reboot.target halt.target
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+ExecStart=/bin/true
+ExecStop=/usr/bin/cerberus-pandora bomb
+
+[Install]
+WantedBy=shutdown.target
