@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+
+# Cerberus Installer v1.0.0AlfaStable
+# Engineered by 0xb0rn3 | 0xbv1
+# Repository: https://github.com/0xb0rn3/cerberus
+# License: GNU General Public License v3
+
+export BLUE='\033[1;94m'
+export GREEN='\033[1;92m'
+export RED='\033[1;91m'
+export RESETCOLOR='\033[1;00m'
+
+# Check if running as root
+if [ $(id -u) -ne 0 ]; then
+    echo -e "$RED This script must be run as root$RESETCOLOR"
+    exit 1
+fi
+
+echo -e "$RED╔═══════════════════════════════════════════════════════════════════════════════╗
+$RED║                    $GREEN Cerberus v1.0.0AlfaStable Installer                       $RED║
+$RED║                    $BLUE Engineered by 0xb0rn3 | 0xbv1                            $RED║
+$RED║                    $BLUE https://github.com/0xb0rn3/cerberus                      $RED║
+$RED╚═══════════════════════════════════════════════════════════════════════════════╝$RESETCOLOR\n"
+
+echo -e "$GREEN Installing Cerberus dependencies...$RESETCOLOR"
+
+# Update system
+pacman -Sy
+
+# Install core dependencies
+echo -e "$BLUE Installing core packages...$RESETCOLOR"
+pacman -S --needed --noconfirm tor iptables secure-delete curl wget
+
+# Install optional I2P support
+echo -e "$BLUE Do you want to install I2P support? (y/N)$RESETCOLOR"
+read -r install_i2p
+if [[ $install_i2p =~ ^[Yy]$ ]]; then
+    echo -e "$BLUE Installing I2P...$RESETCOLOR"
+    # Check if yay is available for AUR packages
+    if command -v yay > /dev/null; then
+        yay -S --needed --noconfirm i2pd
+    elif command -v paru > /dev/null; then
+        paru -S --needed --noconfirm i2pd
+    else
+        echo -e "$RED No AUR helper found. Please install i2pd manually if needed.$RESETCOLOR"
+    fi
+fi
+
+# Create necessary directories
+echo -e "$BLUE Creating directories...$RESETCOLOR"
+mkdir -p /etc/cerberus
+mkdir -p /var/log/cerberus
+
+# Install main scripts
+echo -e "$BLUE Installing Cerberus scripts...$RESETCOLOR"
+cp cerberus /usr/bin/cerberus
+cp cerberus-pandora /usr/bin/cerberus-pandora
+chmod +x /usr/bin/cerberus
+chmod +x /usr/bin/cerberus-pandora
+
+# Install configuration files
+echo -e "$BLUE Installing configuration files...$RESETCOLOR"
+cp torrc.cerberus /etc/tor/torrc.cerberus
+cp cerberus.pac /etc/cerberus/cerberus.pac
+
+# Install systemd service
+echo -e "$BLUE Installing systemd service...$RESETCOLOR"
+cp cerberus-pandora.service /etc/systemd/system/cerberus-pandora.service
+systemctl daemon-reload
+systemctl enable cerberus-pandora.service
+
+# Configure Tor
+echo -e "$BLUE Configuring Tor...$RESETCOLOR"
+if [ -f /etc/tor/torrc ]; then
+    cp /etc/tor/torrc /etc/tor/torrc.backup
+fi
+
+# Set up Tor configuration
+cat > /etc/tor/torrc << 'EOF'
+# Cerberus Tor Configuration
+# Engineered by 0xb0rn3 | 0xbv1
+
+VirtualAddrNetwork 10.192.0.0/10
+AutomapHostsOnResolve 1
+TransPort 9040
+SocksPort 9050
+DNSPort 53
+RunAsDaemon 1
+
+# Security settings
+AvoidDiskWrites 1
+Log notice file /var/log/tor/notices.log
+DataDirectory /var/lib/tor
+
+# User configuration
+User tor
+PidFile /run/tor/tor.pid
+EOF
+
+# Set correct permissions
+chown -R tor:tor /var/lib/tor
+chmod 700 /var/lib/tor
+
+# Enable and start Tor service
+systemctl enable tor
+systemctl start tor
+
+echo -e "$GREEN Cerberus installation completed successfully!$RESETCOLOR\n"
+echo -e "$BLUE Usage:$RESETCOLOR"
+echo -e "$GREEN cerberus start$BLUE    - Start anonymous tunneling$RESETCOLOR"
+echo -e "$GREEN cerberus stop$BLUE     - Stop anonymous tunneling$RESETCOLOR"
+echo -e "$GREEN cerberus status$BLUE   - Check status$RESETCOLOR"
+echo -e "$GREEN cerberus myip$BLUE     - Show current IP$RESETCOLOR"
+echo -e "$GREEN cerberus change$BLUE   - Change Tor identity$RESETCOLOR"
+echo -e "$GREEN cerberus-pandora bomb$BLUE - Clean RAM memory$RESETCOLOR"
+
+echo -e "\n$RED WARNING: Always verify your IP address after starting Cerberus!$RESETCOLOR"
+echo -e "$BLUE Run: cerberus myip$RESETCOLOR\n"
+
+exit 0
