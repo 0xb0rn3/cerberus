@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+
+### BEGIN INIT INFO
+# Provides:          cerberus-pandora
+# Required-Start:
+# Required-Stop:     umountroot
+# Should-Start:
+# Should-Stop:       halt reboot
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Cerberus Pandora RAM cleaner
+### END INIT INFO
+
+# Cerberus Pandora v1.0.0AlfaStable - RAM Memory Cleaner
+# Engineered by 0xb0rn3 | 0xbv1
+# Repository: https://github.com/0xb0rn3/cerberus
+# License: GNU General Public License v3
+
+export BLUE='\033[1;94m'
+export GREEN='\033[1;92m'
+export RED='\033[1;91m'
+export RESETCOLOR='\033[1;00m'
+
+function bomb {
+    echo -e "$GREEN Starting Cerberus Pandora RAM cleaner$RESETCOLOR"
+    sleep 2
+    
+    echo -e "$BLUE Pandora is optimizing memory$RESETCOLOR"
+    echo 1024 > /proc/sys/vm/min_free_kbytes
+    echo 3 > /proc/sys/vm/drop_caches
+    echo 1 > /proc/sys/vm/oom_kill_allocating_task
+    echo 1 > /proc/sys/vm/overcommit_memory
+    echo 0 > /proc/sys/vm/oom_dump_tasks
+    
+    echo -e "$BLUE Pandora is wiping RAM$RESETCOLOR"
+    if command -v sdmem > /dev/null; then
+        sdmem -fllv
+    else
+        echo -e "$RED sdmem not found, install secure-delete package$RESETCOLOR"
+        # Alternative memory clearing method
+        sync && echo 1 > /proc/sys/vm/drop_caches
+        sync && echo 2 > /proc/sys/vm/drop_caches
+        sync && echo 3 > /proc/sys/vm/drop_caches
+    fi
+    
+    echo -e "$GREEN RAM cleaning completed$RESETCOLOR"
+    echo -e "$GREEN Cerberus Pandora finished$RESETCOLOR"
+}
+
+case "$1" in
+    start)
+        echo -e "$RED Use 'bomb' command instead$RESETCOLOR"
+    ;;
+    restart|reload|force-reload)
+        echo -e "$RED Use 'bomb' command instead$RESETCOLOR"
+    ;;
+    stop)
+        bomb
+    ;;
+    bomb)
+        bomb
+    ;;
+    *)
+        echo -e "
+$RED╔═══════════════════════════════════════════════════════════════════════════════╗
+$RED║                  $GREEN Cerberus Pandora v1.0.0AlfaStable                          $RED║
+$RED║                  $BLUE Engineered by 0xb0rn3 | 0xbv1                              $RED║
+$RED║                  $BLUE https://github.com/0xb0rn3/cerberus                        $RED║
+$RED╚═══════════════════════════════════════════════════════════════════════════════╝$RESETCOLOR
+
+Usage: cerberus-pandora bomb
+
+$GREEN bomb$BLUE - Clean and wipe RAM memory
+$RESETCOLOR"
+    ;;
+esac
+
+exit 0
