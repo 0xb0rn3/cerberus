@@ -1,15 +1,18 @@
-# Cerberus Tor Configuration
-# Engineered by 0xb0rn3 | 0xbv1
-# Repository: https://github.com/0xb0rn3/cerberus
-
+# Basic settings
 VirtualAddrNetwork 10.192.0.0/10
 AutomapHostsOnResolve 1
 TransPort 9040
 SocksPort 9050
-DNSPort 5353
+DNSPort 5354
 RunAsDaemon 1
 
-# Additional security settings
+# Security settings
 AvoidDiskWrites 1
-Log notice file /var/log/tor/notices.log
 DataDirectory /var/lib/tor
+
+# User configuration
+User tor
+PidFile /run/tor/tor.pid
+
+# Logging - only if log directory exists
+Log notice file /var/log/tor/notices.log
