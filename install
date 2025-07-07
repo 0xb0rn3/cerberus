@@ -25,11 +25,12 @@ $RED╚════════════════════════�
 echo -e "$GREEN Installing Cerberus dependencies...$RESETCOLOR"
 
 # Update system
+echo -e "$BLUE Updating system packages...$RESETCOLOR"
 pacman -Sy
 
 # Install core dependencies
 echo -e "$BLUE Installing core packages...$RESETCOLOR"
-pacman -S --needed --noconfirm tor iptables secure-delete curl wget
+pacman -S --needed --noconfirm tor iptables secure-delete curl wget nyx torsocks gnu-netcat
 
 # Install optional I2P support
 echo -e "$BLUE Do you want to install I2P support? (y/N)$RESETCOLOR"
@@ -46,10 +47,23 @@ if [[ $install_i2p =~ ^[Yy]$ ]]; then
     fi
 fi
 
-# Create necessary directories
+# Create necessary directories with proper permissions
 echo -e "$BLUE Creating directories...$RESETCOLOR"
 mkdir -p /etc/cerberus
 mkdir -p /var/log/cerberus
+mkdir -p /var/lib/tor
+mkdir -p /var/log/tor
+mkdir -p /run/tor
+
+# Set proper ownership and permissions
+echo -e "$BLUE Setting up permissions...$RESETCOLOR"
+chown -R tor:tor /var/lib/tor
+chown -R tor:tor /var/log/tor
+chown -R tor:tor /run/tor
+
+chmod 700 /var/lib/tor
+chmod 755 /var/log/tor
+chmod 755 /run/tor
 
 # Install main scripts
 echo -e "$BLUE Installing Cerberus scripts...$RESETCOLOR"
@@ -75,11 +89,12 @@ if [ -f /etc/tor/torrc ]; then
     cp /etc/tor/torrc /etc/tor/torrc.backup
 fi
 
-# Set up Tor configuration
+# Set up optimized Tor configuration
 cat > /etc/tor/torrc << 'EOF'
 # Cerberus Tor Configuration
 # Engineered by 0xb0rn3 | 0xbv1
 
+# Basic settings
 VirtualAddrNetwork 10.192.0.0/10
 AutomapHostsOnResolve 1
 TransPort 9040
@@ -89,21 +104,72 @@ RunAsDaemon 1
 
 # Security settings
 AvoidDiskWrites 1
-Log notice file /var/log/tor/notices.log
 DataDirectory /var/lib/tor
 
 # User configuration
 User tor
 PidFile /run/tor/tor.pid
+
+# Logging
+Log notice file /var/log/tor/notices.log
+
+# Control port for changing identity
+ControlPort 9051
+CookieAuthentication 1
+CookieAuthFileGroupReadable 1
+
+# Performance optimizations
+NumCPUs 2
+RelayBandwidthRate 1024 KB
+RelayBandwidthBurst 2048 KB
+MaxMemInQueues 512 MB
+
+# Exit policy
+ExitPolicy reject *:*
 EOF
 
 # Set correct permissions
+echo -e "$BLUE Setting up Tor permissions...$RESETCOLOR"
 chown -R tor:tor /var/lib/tor
+chown -R tor:tor /var/log/tor
+chown -R tor:tor /run/tor
 chmod 700 /var/lib/tor
+chmod 755 /var/log/tor
+chmod 755 /run/tor
+chown root:root /etc/tor/torrc
+chmod 644 /etc/tor/torrc
+
+# Create tor user if it doesn't exist
+if ! id -u tor > /dev/null 2>&1; then
+    echo -e "$BLUE Creating tor user...$RESETCOLOR"
+    useradd -r -s /bin/false -d /var/lib/tor -c "Tor daemon user" tor
+fi
+
+# Test Tor configuration
+echo -e "$BLUE Testing Tor configuration...$RESETCOLOR"
+if sudo -u tor tor --verify-config -f /etc/tor/torrc; then
+    echo -e "$GREEN Tor configuration is valid$RESETCOLOR"
+else
+    echo -e "$RED Tor configuration has errors$RESETCOLOR"
+    exit 1
+fi
 
 # Enable and start Tor service
+echo -e "$BLUE Starting Tor service...$RESETCOLOR"
 systemctl enable tor
 systemctl start tor
+
+# Wait for Tor to start
+sleep 5
+
+# Verify Tor is running
+if systemctl is-active --quiet tor; then
+    echo -e "$GREEN Tor service started successfully$RESETCOLOR"
+else
+    echo -e "$RED Tor service failed to start. Checking logs...$RESETCOLOR"
+    journalctl -u tor.service --no-pager -n 10
+    echo -e "$RED Please check the logs above for errors$RESETCOLOR"
+fi
 
 echo -e "$GREEN Cerberus installation completed successfully!$RESETCOLOR\n"
 echo -e "$BLUE Usage:$RESETCOLOR"
@@ -114,7 +180,13 @@ echo -e "$GREEN cerberus myip$BLUE     - Show current IP$RESETCOLOR"
 echo -e "$GREEN cerberus change$BLUE   - Change Tor identity$RESETCOLOR"
 echo -e "$GREEN cerberus-pandora bomb$BLUE - Clean RAM memory$RESETCOLOR"
 
+echo -e "\n$GREEN Testing Tor connectivity...$RESETCOLOR"
+if timeout 10 curl -s --socks5-hostname 127.0.0.1:9050 https://check.torproject.org/ | grep -q "Congratulations"; then
+    echo -e "$GREEN Tor is working correctly!$RESETCOLOR"
+else
+    echo -e "$RED Warning: Tor connectivity test failed$RESETCOLOR"
+fi
+
 echo -e "\n$RED WARNING: Always verify your IP address after starting Cerberus!$RESETCOLOR"
 echo -e "$BLUE Run: cerberus myip$RESETCOLOR\n"
-
 exit 0
