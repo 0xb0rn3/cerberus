@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Cerberus Installer v1.0.1 - Fixed Version
+# Cerberus Installer v1.0.0AlfaStable
 # Engineered by 0xb0rn3 | 0xbv1
 # Repository: https://github.com/0xb0rn3/cerberus
 # License: GNU General Public License v3
@@ -8,13 +8,7 @@
 export BLUE='\033[1;94m'
 export GREEN='\033[1;92m'
 export RED='\033[1;91m'
-export YELLOW='\033[1;93m'
 export RESETCOLOR='\033[1;00m'
-
-# Log file for installation
-LOG_FILE="/tmp/cerberus_install.log"
-exec 1> >(tee -a "$LOG_FILE")
-exec 2> >(tee -a "$LOG_FILE" >&2)
 
 # Check if running as root
 if [ $(id -u) -ne 0 ]; then
@@ -23,39 +17,19 @@ if [ $(id -u) -ne 0 ]; then
 fi
 
 echo -e "$RED╔═══════════════════════════════════════════════════════════════════════════════╗
-$RED║                    $GREEN Cerberus v1.0.1 Fixed Installer                          $RED║
+$RED║                    $GREEN Cerberus v1.0.0AlfaStable Installer                       $RED║
 $RED║                    $BLUE Engineered by 0xb0rn3 | 0xbv1                            $RED║
 $RED║                    $BLUE https://github.com/0xb0rn3/cerberus                      $RED║
 $RED╚═══════════════════════════════════════════════════════════════════════════════╝$RESETCOLOR\n"
 
-# Function to check command success
-check_success() {
-    if [ $? -eq 0 ]; then
-        echo -e "$GREEN✓ $1 completed successfully$RESETCOLOR"
-    else
-        echo -e "$RED✗ $1 failed$RESETCOLOR"
-        exit 1
-    fi
-}
-
-# Function to install packages silently
-install_packages() {
-    local packages="$1"
-    echo -e "$BLUE Installing packages: $packages$RESETCOLOR"
-    
-    # Update system first
-    pacman -Sy --noconfirm > /dev/null 2>&1
-    check_success "System update"
-    
-    # Install packages
-    pacman -S --needed --noconfirm $packages > /dev/null 2>&1
-    check_success "Package installation"
-}
-
 echo -e "$GREEN Installing Cerberus dependencies...$RESETCOLOR"
 
+# Update system
+pacman -Sy
+
 # Install core dependencies
-install_packages "tor iptables secure-delete curl wget dnsutils"
+echo -e "$BLUE Installing core packages...$RESETCOLOR"
+pacman -S --needed --noconfirm tor iptables secure-delete curl wget
 
 # Install optional I2P support
 echo -e "$BLUE Do you want to install I2P support? (y/N)$RESETCOLOR"
@@ -63,14 +37,12 @@ read -r install_i2p
 if [[ $install_i2p =~ ^[Yy]$ ]]; then
     echo -e "$BLUE Installing I2P...$RESETCOLOR"
     # Check if yay is available for AUR packages
-    if command -v yay > /dev/null 2>&1; then
-        yay -S --needed --noconfirm i2pd > /dev/null 2>&1
-        check_success "I2P installation"
-    elif command -v paru > /dev/null 2>&1; then
-        paru -S --needed --noconfirm i2pd > /dev/null 2>&1
-        check_success "I2P installation"
+    if command -v yay > /dev/null; then
+        yay -S --needed --noconfirm i2pd
+    elif command -v paru > /dev/null; then
+        paru -S --needed --noconfirm i2pd
     else
-        echo -e "$YELLOW No AUR helper found. Please install i2pd manually if needed.$RESETCOLOR"
+        echo -e "$RED No AUR helper found. Please install i2pd manually if needed.$RESETCOLOR"
     fi
 fi
 
@@ -78,22 +50,6 @@ fi
 echo -e "$BLUE Creating directories...$RESETCOLOR"
 mkdir -p /etc/cerberus
 mkdir -p /var/log/cerberus
-mkdir -p /var/lib/tor
-mkdir -p /var/log/tor
-check_success "Directory creation"
-
-# Set correct permissions for Tor directories
-echo -e "$BLUE Setting up Tor user and permissions...$RESETCOLOR"
-# Ensure tor user exists
-if ! id -u tor > /dev/null 2>&1; then
-    useradd -r -s /bin/false tor
-fi
-
-chown -R tor:tor /var/lib/tor
-chown -R tor:tor /var/log/tor
-chmod 700 /var/lib/tor
-chmod 755 /var/log/tor
-check_success "Tor permissions setup"
 
 # Install main scripts
 echo -e "$BLUE Installing Cerberus scripts...$RESETCOLOR"
@@ -101,72 +57,55 @@ cp cerberus /usr/bin/cerberus
 cp cerberus-pandora /usr/bin/cerberus-pandora
 chmod +x /usr/bin/cerberus
 chmod +x /usr/bin/cerberus-pandora
-check_success "Script installation"
 
 # Install configuration files
 echo -e "$BLUE Installing configuration files...$RESETCOLOR"
-cp torrc.cerberus /etc/cerberus/torrc.cerberus
+cp torrc.cerberus /etc/tor/torrc.cerberus
 cp cerberus.pac /etc/cerberus/cerberus.pac
-check_success "Configuration file installation"
 
 # Install systemd service
 echo -e "$BLUE Installing systemd service...$RESETCOLOR"
 cp cerberus-pandora.service /etc/systemd/system/cerberus-pandora.service
-systemctl daemon-reload > /dev/null 2>&1
-systemctl enable cerberus-pandora.service > /dev/null 2>&1
-check_success "Systemd service installation"
+systemctl daemon-reload
+systemctl enable cerberus-pandora.service
 
-# Backup original Tor configuration
-echo -e "$BLUE Backing up original Tor configuration...$RESETCOLOR"
+# Configure Tor
+echo -e "$BLUE Configuring Tor...$RESETCOLOR"
 if [ -f /etc/tor/torrc ]; then
-    cp /etc/tor/torrc /etc/tor/torrc.original
+    cp /etc/tor/torrc /etc/tor/torrc.backup
 fi
 
-# Test Tor configuration before applying
-echo -e "$BLUE Testing Tor configuration...$RESETCOLOR"
-/usr/bin/tor -f /etc/cerberus/torrc.cerberus --verify-config > /dev/null 2>&1
-if [ $? -eq 0 ]; then
-    echo -e "$GREEN✓ Tor configuration is valid$RESETCOLOR"
-else
-    echo -e "$RED✗ Tor configuration is invalid. Using safe defaults.$RESETCOLOR"
-    # Create a minimal safe configuration
-    cat > /etc/cerberus/torrc.cerberus << 'EOF'
-# Minimal Cerberus Tor Configuration
-SocksPort 9050
-TransPort 9040
-DNSPort 5354
+# Set up Tor configuration
+cat > /etc/tor/torrc << 'EOF'
+# Cerberus Tor Configuration
+# Engineered by 0xb0rn3 | 0xbv1
+
 VirtualAddrNetwork 10.192.0.0/10
 AutomapHostsOnResolve 1
+TransPort 9040
+SocksPort 9050
+DNSPort 5354
 RunAsDaemon 1
-User tor
-DataDirectory /var/lib/tor
+
+# Security settings
+AvoidDiskWrites 1
 Log notice file /var/log/tor/notices.log
+DataDirectory /var/lib/tor
+
+# User configuration
+User tor
+PidFile /run/tor/tor.pid
 EOF
-fi
 
-# Stop Tor if running
-echo -e "$BLUE Stopping Tor service...$RESETCOLOR"
-systemctl stop tor > /dev/null 2>&1
+# Set correct permissions
+chown -R tor:tor /var/lib/tor
+chmod 700 /var/lib/tor
 
-# Clean up any existing Tor processes
-pkill -f tor > /dev/null 2>&1
+# Enable and start Tor service
+systemctl enable tor
+systemctl start tor
 
-# Test Tor startup
-echo -e "$BLUE Testing Tor startup...$RESETCOLOR"
-systemctl start tor > /dev/null 2>&1
-sleep 3
-
-if systemctl is-active --quiet tor; then
-    echo -e "$GREEN✓ Tor service started successfully$RESETCOLOR"
-    systemctl stop tor > /dev/null 2>&1
-else
-    echo -e "$YELLOW⚠ Tor service startup issues detected. Will be handled by Cerberus.$RESETCOLOR"
-fi
-
-echo -e "$GREEN╔═══════════════════════════════════════════════════════════════════════════════╗
-$GREEN║                    Cerberus installation completed successfully!                  ║
-$GREEN╚═══════════════════════════════════════════════════════════════════════════════╝$RESETCOLOR\n"
-
+echo -e "$GREEN Cerberus installation completed successfully!$RESETCOLOR\n"
 echo -e "$BLUE Usage:$RESETCOLOR"
 echo -e "$GREEN cerberus start$BLUE    - Start anonymous tunneling$RESETCOLOR"
 echo -e "$GREEN cerberus stop$BLUE     - Stop anonymous tunneling$RESETCOLOR"
@@ -176,13 +115,6 @@ echo -e "$GREEN cerberus change$BLUE   - Change Tor identity$RESETCOLOR"
 echo -e "$GREEN cerberus-pandora bomb$BLUE - Clean RAM memory$RESETCOLOR"
 
 echo -e "\n$RED WARNING: Always verify your IP address after starting Cerberus!$RESETCOLOR"
-echo -e "$BLUE Run: cerberus myip$RESETCOLOR"
-echo -e "$BLUE Installation log saved to: $LOG_FILE$RESETCOLOR\n"
-
-# Compress and archive the installation log
-echo -e "$BLUE Compressing installation log...$RESETCOLOR"
-gzip "$LOG_FILE"
-mv "$LOG_FILE.gz" "/var/log/cerberus/install_$(date +%Y%m%d_%H%M%S).log.gz"
-echo -e "$GREEN✓ Installation log compressed and saved$RESETCOLOR"
+echo -e "$BLUE Run: cerberus myip$RESETCOLOR\n"
 
 exit 0
