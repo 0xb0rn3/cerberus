@@ -10,26 +10,34 @@
 # Short-Description: Transparent Proxy through TOR.
 ### END INIT INFO
 
-# Cerberus v1.0.0AlfaStable - Transparent Proxy through TOR
+# Cerberus v2.0.0 - Transparent Proxy through TOR with Advanced Network Integration
 # Engineered by 0xb0rn3 | 0xbv1
 # Repository: https://github.com/0xb0rn3/cerberus
-# 
-# Based on AnonSurf, adapted for Arch-based systems
-# License: GNU General Public License v3
 
 export BLUE='\033[1;94m'
 export GREEN='\033[1;92m'
 export RED='\033[1;91m'
+export YELLOW='\033[1;93m'
 export RESETCOLOR='\033[1;00m'
 
 # Destinations you don't want routed through Tor
 TOR_EXCLUDE="192.168.0.0/16 172.16.0.0/12 10.0.0.0/8"
 
-# The UID Tor runs as (Arch uses 'tor' user)
+# The UID Tor runs as
 TOR_UID="tor"
 
 # Tor's TransPort
 TOR_PORT="9040"
+
+# Cerberus directories
+CERBERUS_DIR="/var/lib/cerberus"
+CERBERUS_CACHE="$CERBERUS_DIR/cache"
+CERBERUS_LOGS="/var/log/cerberus"
+
+# Exit node lists
+EXIT_NODES_FILE="$CERBERUS_CACHE/exit-nodes.txt"
+ALL_NODES_FILE="$CERBERUS_CACHE/all-nodes.txt"
+NODE_METADATA="$CERBERUS_CACHE/node-metadata.json"
 
 # Check if systemd-resolved is active
 if systemctl is-active --quiet systemd-resolved; then
@@ -38,13 +46,20 @@ else
     resolved_support=false
 fi
 
+function setup_cerberus_directories {
+    mkdir -p "$CERBERUS_DIR"
+    mkdir -p "$CERBERUS_CACHE"
+    mkdir -p "$CERBERUS_LOGS"
+    chmod 755 "$CERBERUS_DIR"
+    chmod 755 "$CERBERUS_CACHE"
+    chmod 755 "$CERBERUS_LOGS"
+}
+
 function setup_tor_directories {
-    # Create necessary directories with proper permissions
     mkdir -p /var/lib/tor
     mkdir -p /var/log/tor
     mkdir -p /run/tor
     
-    # Set proper ownership and permissions
     chown -R tor:tor /var/lib/tor
     chown -R tor:tor /var/log/tor
     chown -R tor:tor /run/tor
@@ -55,79 +70,276 @@ function setup_tor_directories {
 }
 
 function configure_tor {
-    # Backup original torrc
     if [ -f /etc/tor/torrc ] && [ ! -f /etc/tor/torrc.backup ]; then
         cp /etc/tor/torrc /etc/tor/torrc.backup
     fi
     
-    # Create optimized torrc configuration
     cat > /etc/tor/torrc << 'EOF'
-# Cerberus Tor Configuration
-# Engineered by 0xb0rn3 | 0xbv1
+# Cerberus Tor Configuration v2.0.0
 
-# Basic settings
+# Network settings
 VirtualAddrNetwork 10.192.0.0/10
 AutomapHostsOnResolve 1
-TransPort 9040
-SocksPort 9050
+TransPort 9040 IsolateClientAddr IsolateSOCKSAuth IsolateClientProtocol IsolateDestPort IsolateDestAddr
+SocksPort 9050 IsolateClientAddr IsolateSOCKSAuth IsolateClientProtocol IsolateDestPort IsolateDestAddr
 DNSPort 5354
 RunAsDaemon 1
 
 # Security settings
 AvoidDiskWrites 1
 DataDirectory /var/lib/tor
-
-# User configuration
 User tor
 PidFile /run/tor/tor.pid
 
-# Logging
-Log notice file /var/log/tor/notices.log
-
-# Control port for changing identity
+# Control port for identity changes and monitoring
 ControlPort 9051
 CookieAuthentication 1
 CookieAuthFileGroupReadable 1
+CookieAuthFile /run/tor/control.authcookie
 
 # Performance optimizations
 NumCPUs 2
-RelayBandwidthRate 1024 KB
-RelayBandwidthBurst 2048 KB
-MaxMemInQueues 512 MB
+CircuitBuildTimeout 10
+LearnCircuitBuildTimeout 0
+CircuitIdleTimeout 60
+CircuitStreamTimeout 60
+ClientOnly 1
+ExcludeSingleHopRelays 1
+EnforceDistinctSubnets 1
+NewCircuitPeriod 30
+MaxCircuitDirtiness 600
+
+# Connection settings
+KeepAlivePeriod 60
+ConnLimit 2048
+ReducedConnectionPadding 1
+
+# Logging
+Log notice file /var/log/tor/notices.log
 
 # Exit policy
 ExitPolicy reject *:*
 EOF
     
-    # Set proper permissions for torrc
     chown root:root /etc/tor/torrc
     chmod 644 /etc/tor/torrc
 }
 
-function init {
-    echo -e -n " $GREEN*$BLUE killing dangerous applications$RESETCOLOR\n"
-    killall -q chrome dropbox firefox chromium skype thunderbird transmission deluge pidgin telegram discord slack signal-desktop 2>/dev/null || true
+function update_exit_nodes {
+    echo -e "$BLUE Updating Tor exit node lists...$RESETCOLOR"
     
-    echo -e -n " $GREEN*$BLUE cleaning cache elements$RESETCOLOR\n"
-    # Clean browser caches if bleachbit is available
-    if command -v bleachbit > /dev/null; then
-        bleachbit -c firefox.cache chromium.cache google_chrome.cache &> /dev/null || true
+    setup_cerberus_directories
+    
+    local temp_file="/tmp/tor-exits-$$"
+    local sources_updated=0
+    
+    # Source 1: Dan.me.uk (most reliable, 30-min updates)
+    if timeout 10 curl -sSL "https://www.dan.me.uk/torlist/?exit" -o "$temp_file" 2>/dev/null; then
+        grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' "$temp_file" > "$EXIT_NODES_FILE.tmp"
+        if [ -s "$EXIT_NODES_FILE.tmp" ]; then
+            mv "$EXIT_NODES_FILE.tmp" "$EXIT_NODES_FILE"
+            echo -e "$GREEN ✓ Updated from dan.me.uk: $(wc -l < $EXIT_NODES_FILE) exit nodes$RESETCOLOR"
+            ((sources_updated++))
+        fi
     fi
     
-    # Clean temporary files
-    find /tmp -name "*.tmp" -type f -delete 2>/dev/null || true
-    find /var/tmp -name "*.tmp" -type f -delete 2>/dev/null || true
+    # Source 2: GitHub platformbuilds (hourly updates)
+    if timeout 10 curl -sSL "https://raw.githubusercontent.com/platformbuilds/Tor-IP-Addresses/master/tor-exit-nodes.lst" -o "$temp_file" 2>/dev/null; then
+        grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' "$temp_file" >> "$EXIT_NODES_FILE.tmp2"
+        if [ -s "$EXIT_NODES_FILE.tmp2" ]; then
+            cat "$EXIT_NODES_FILE" "$EXIT_NODES_FILE.tmp2" 2>/dev/null | sort -u > "$EXIT_NODES_FILE.new"
+            mv "$EXIT_NODES_FILE.new" "$EXIT_NODES_FILE"
+            rm -f "$EXIT_NODES_FILE.tmp2"
+            echo -e "$GREEN ✓ Merged GitHub data: $(wc -l < $EXIT_NODES_FILE) total nodes$RESETCOLOR"
+            ((sources_updated++))
+        fi
+    fi
+    
+    # Source 3: All Tor nodes for complete list
+    if timeout 10 curl -sSL "https://www.dan.me.uk/torlist/" -o "$temp_file" 2>/dev/null; then
+        grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' "$temp_file" > "$ALL_NODES_FILE"
+        if [ -s "$ALL_NODES_FILE" ]; then
+            echo -e "$GREEN ✓ Updated all nodes: $(wc -l < $ALL_NODES_FILE) total$RESETCOLOR"
+        fi
+    fi
+    
+    rm -f "$temp_file"
+    
+    if [ $sources_updated -eq 0 ]; then
+        echo -e "$YELLOW ⚠ Could not update exit nodes. Using cached list if available.$RESETCOLOR"
+        if [ ! -f "$EXIT_NODES_FILE" ] || [ ! -s "$EXIT_NODES_FILE" ]; then
+            echo -e "$RED ✗ No cached exit nodes available. Network features limited.$RESETCOLOR"
+            return 1
+        fi
+    fi
+    
+    # Create ipset for efficient lookup if available
+    if command -v ipset > /dev/null 2>&1; then
+        ipset create tor-exits hash:ip -exist 2>/dev/null || true
+        ipset flush tor-exits 2>/dev/null || true
+        
+        while IFS= read -r ip; do
+            ipset add tor-exits "$ip" -exist 2>/dev/null || true
+        done < "$EXIT_NODES_FILE"
+        
+        echo -e "$GREEN ✓ Loaded $(ipset list tor-exits | grep -c '^[0-9]') IPs into ipset$RESETCOLOR"
+    fi
+    
+    return 0
+}
+
+function verify_tor_exit {
+    local ip="$1"
+    
+    # Reverse IP for DNS query
+    local reversed=$(echo "$ip" | awk -F. '{print $4"."$3"."$2"."$1}')
+    
+    # Method 1: Dan.me.uk DNSBL (fastest, most reliable)
+    if host -W 1 "${reversed}.torexit.dan.me.uk" 2>/dev/null | grep -q "127.0.0.100"; then
+        return 0
+    fi
+    
+    # Method 2: Official Tor Project DNSEL
+    if host -W 1 "${reversed}.dnsel.torproject.org" 2>/dev/null | grep -q "127.0.0.2"; then
+        return 0
+    fi
+    
+    # Method 3: Local cache check
+    if [ -f "$EXIT_NODES_FILE" ] && grep -q "^${ip}$" "$EXIT_NODES_FILE" 2>/dev/null; then
+        return 0
+    fi
+    
+    return 1
+}
+
+function get_tor_info {
+    echo -e "\n$BLUE Tor Network Information:$RESETCOLOR\n"
+    
+    # Current exit node
+    local current_ip=$(timeout 5 curl -sSL --socks5-hostname 127.0.0.1:9050 "https://api.ipify.org" 2>/dev/null)
+    
+    if [ -n "$current_ip" ]; then
+        echo -e "$GREEN Current Exit Node:$RESETCOLOR $current_ip"
+        
+        # Verify it's actually a Tor exit
+        if verify_tor_exit "$current_ip"; then
+            echo -e "$GREEN ✓ Verified Tor exit node$RESETCOLOR"
+        else
+            echo -e "$YELLOW ⚠ Could not verify as Tor exit (may be new)$RESETCOLOR"
+        fi
+        
+        # Get geolocation if possible
+        local geo=$(timeout 5 curl -sSL "http://ip-api.com/json/$current_ip" 2>/dev/null | \
+                   grep -oP '"country":"[^"]+"|"city":"[^"]+"|"isp":"[^"]+"|"as":"[^"]+"' | \
+                   cut -d'"' -f4 | paste -sd", " -)
+        
+        if [ -n "$geo" ]; then
+            echo -e "$BLUE Location/ISP:$RESETCOLOR $geo"
+        fi
+    else
+        echo -e "$RED ✗ Could not determine current exit node$RESETCOLOR"
+    fi
+    
+    # Circuit info from Tor control port
+    if [ -S /run/tor/control ]; then
+        echo -e "\n$BLUE Tor Circuits:$RESETCOLOR"
+        echo -e "AUTHENTICATE\nGETINFO circuit-status\nQUIT" | nc -U /run/tor/control 2>/dev/null | \
+            grep -E "^[0-9]+ BUILT" | head -3 | while read line; do
+                echo "  • $line"
+            done
+    fi
+    
+    # Statistics
+    if [ -f "$EXIT_NODES_FILE" ]; then
+        echo -e "\n$BLUE Statistics:$RESETCOLOR"
+        echo -e "  • Known exit nodes: $(wc -l < $EXIT_NODES_FILE)"
+        [ -f "$ALL_NODES_FILE" ] && echo -e "  • Total Tor nodes: $(wc -l < $ALL_NODES_FILE)"
+        echo -e "  • Last update: $(stat -c %y $EXIT_NODES_FILE | cut -d' ' -f1,2)"
+    fi
+    
+    echo ""
+}
+
+function monitor_tor {
+    echo -e "\n$BLUE Starting Tor network monitor...$RESETCOLOR"
+    echo -e "$YELLOW Press Ctrl+C to stop$RESETCOLOR\n"
+    
+    while true; do
+        clear
+        echo -e "$RED╔═══════════════════════════════════════════════════════════════════════════════╗"
+        echo -e "$RED║                    $GREEN Cerberus v2.0.0 - Tor Network Monitor                    $RED║"
+        echo -e "$RED╚═══════════════════════════════════════════════════════════════════════════════╝$RESETCOLOR\n"
+        
+        # Current status
+        if systemctl is-active --quiet tor; then
+            echo -e "$GREEN ✓ Tor service: ACTIVE$RESETCOLOR"
+        else
+            echo -e "$RED ✗ Tor service: INACTIVE$RESETCOLOR"
+        fi
+        
+        # Current IP and verification
+        local current_ip=$(timeout 3 curl -sSL --socks5-hostname 127.0.0.1:9050 "https://api.ipify.org" 2>/dev/null)
+        if [ -n "$current_ip" ]; then
+            echo -e "$GREEN ✓ Exit node IP:$RESETCOLOR $current_ip"
+            
+            if verify_tor_exit "$current_ip"; then
+                echo -e "$GREEN ✓ Verification: Confirmed Tor exit$RESETCOLOR"
+            else
+                echo -e "$YELLOW ⚠ IP unchanged. Circuit may be building...$RESETCOLOR"
+            fi
+        else
+            echo -e "$GREEN ✓ Signal sent. New circuits building...$RESETCOLOR"
+        fi
+    else
+        echo -e " $RED*$BLUE Tor is not running$RESETCOLOR\n"
+    fi
+}
+
+function status {
+    echo -e "\n$GREEN[$BLUE i$GREEN ]$BLUE Cerberus Status:$RESETCOLOR\n"
+    
+    if systemctl is-active --quiet tor; then
+        echo -e "$GREEN ✓ Tor service is running$RESETCOLOR"
+        
+        if iptables -t nat -L OUTPUT | grep -q "REDIRECT"; then
+            echo -e "$GREEN ✓ Cerberus tunnel is active$RESETCOLOR"
+        else
+            echo -e "$RED ✗ Cerberus tunnel is not active$RESETCOLOR"
+        fi
+        
+        if timeout 5 curl -s --socks5-hostname 127.0.0.1:9050 https://check.torproject.org/ | grep -q "Congratulations"; then
+            echo -e "$GREEN ✓ Tor connection is working$RESETCOLOR"
+        else
+            echo -e "$RED ✗ Tor connection test failed$RESETCOLOR"
+        fi
+        
+        # Check exit nodes cache
+        if [ -f "$EXIT_NODES_FILE" ]; then
+            local nodes_count=$(wc -l < "$EXIT_NODES_FILE")
+            local last_update=$(stat -c %y "$EXIT_NODES_FILE" | cut -d'.' -f1)
+            echo -e "$GREEN ✓ Exit nodes database: $nodes_count nodes (updated: $last_update)$RESETCOLOR"
+        else
+            echo -e "$YELLOW ⚠ Exit nodes database not found$RESETCOLOR"
+        fi
+    else
+        echo -e "$RED ✗ Tor service is not running$RESETCOLOR"
+    fi
+    
+    if [ -f /etc/sysctl.d/98-cerberus.conf ]; then
+        echo -e "$GREEN ✓ IPv6 is disabled$RESETCOLOR"
+    else
+        echo -e "$BLUE ℹ IPv6 is enabled$RESETCOLOR"
+    fi
+    
+    echo ""
 }
 
 function starti2p {
     echo -e -n " $GREEN*$BLUE starting I2P services$RESETCOLOR\n"
     systemctl stop tor 2>/dev/null || true
     
-    # Modify DNS settings
     if [ "$resolved_support" = true ]; then
-        # Backup current resolved config
         cp /etc/systemd/resolved.conf /etc/systemd/resolved.conf.bak
-        # Configure DNS
         echo -e "[Resolve]\nDNS=127.0.0.1\nFallbackDNS=209.222.18.222 209.222.18.218" > /etc/systemd/resolved.conf
         systemctl restart systemd-resolved
     else
@@ -135,7 +347,6 @@ function starti2p {
         echo -e 'nameserver 127.0.0.1\nnameserver 209.222.18.222\nnameserver 209.222.18.218' > /etc/resolv.conf
     fi
     
-    # Start I2P if installed
     if systemctl is-enabled i2pd &>/dev/null; then
         systemctl start i2pd
         sleep 5
@@ -149,7 +360,6 @@ function stopi2p {
     echo -e -n " $GREEN*$BLUE stopping I2P services$RESETCOLOR\n"
     systemctl stop i2pd 2>/dev/null || true
     
-    # Restore DNS settings
     if [ "$resolved_support" = true ]; then
         if [ -e /etc/systemd/resolved.conf.bak ]; then
             mv /etc/systemd/resolved.conf.bak /etc/systemd/resolved.conf
@@ -162,47 +372,166 @@ function stopi2p {
     fi
 }
 
-function disable_ipv6() {
+case "$1" in
+    start)
+        init
+        start
+    ;;
+    stop)
+        init
+        stop
+    ;;
+    change)
+        change
+    ;;
+    status)
+        status
+    ;;
+    myip|ip)
+        ip
+    ;;
+    info)
+        get_tor_info
+    ;;
+    monitor)
+        monitor_tor
+    ;;
+    update-nodes)
+        update_exit_nodes
+    ;;
+    verify)
+        if [ -z "$2" ]; then
+            echo "Usage: cerberus verify <IP>"
+            exit 1
+        fi
+        if verify_tor_exit "$2"; then
+            echo -e "$GREEN ✓ $2 is a Tor exit node$RESETCOLOR"
+        else
+            echo -e "$RED ✗ $2 is NOT a Tor exit node$RESETCOLOR"
+        fi
+    ;;
+    starti2p)
+        starti2p
+    ;;
+    stopi2p)
+        stopi2p
+    ;;
+    restart)
+        $0 stop
+        sleep 2
+        $0 start
+    ;;
+    *)
+        echo -e "
+$RED╔═══════════════════════════════════════════════════════════════════════════════╗
+$RED║                    $GREEN Cerberus v2.0.0                                           $RED║
+$RED║                    $BLUE Engineered by 0xb0rn3 | 0xbv1                            $RED║
+$RED║                    $BLUE https://github.com/0xb0rn3/cerberus                      $RED║
+$RED╚═══════════════════════════════════════════════════════════════════════════════╝$RESETCOLOR
+
+Usage: cerberus {start|stop|restart|change|status|myip|info|monitor|update-nodes|verify|starti2p|stopi2p}
+
+$GREEN start$BLUE         - Start system-wide anonymous tunneling through TOR
+$GREEN stop$BLUE          - Stop anonymous tunneling and restore original settings  
+$GREEN restart$BLUE       - Restart Cerberus (stop + start)
+$GREEN change$BLUE        - Change TOR identity (get new exit node)
+$GREEN status$BLUE        - Check if Cerberus is running
+$GREEN myip$BLUE          - Show current IP address
+$GREEN info$BLUE          - Show detailed Tor network information
+$GREEN monitor$BLUE       - Real-time Tor network monitoring
+$GREEN update-nodes$BLUE  - Update Tor exit node database
+$GREEN verify <IP>$BLUE   - Check if an IP is a Tor exit node
+$GREEN starti2p$BLUE      - Start I2P services
+$GREEN stopi2p$BLUE       - Stop I2P services
+$RESETCOLOR" >&2
+        exit 1
+    ;;
+esac
+
+echo -e $RESETCOLOR
+exit 0 Verification: Unconfirmed$RESETCOLOR"
+            fi
+        else
+            echo -e "$RED ✗ Cannot reach Tor network$RESETCOLOR"
+        fi
+        
+        # Bandwidth usage (if nyx is installed)
+        if command -v nyx > /dev/null 2>&1; then
+            echo -e "\n$BLUE Bandwidth (last 5 seconds):$RESETCOLOR"
+            timeout 1 echo -e "AUTHENTICATE\nGETINFO traffic/read\nGETINFO traffic/written\nQUIT" | \
+                nc 127.0.0.1 9051 2>/dev/null | grep -E "^250-" | sed 's/250-traffic\//  /'
+        fi
+        
+        # Active circuits
+        echo -e "\n$BLUE Active circuits:$RESETCOLOR"
+        timeout 1 echo -e "AUTHENTICATE\nGETINFO circuit-status\nQUIT" | \
+            nc 127.0.0.1 9051 2>/dev/null | grep "BUILT" | wc -l | xargs echo "  •"
+        
+        sleep 5
+    done
+}
+
+function init {
+    echo -e -n " $GREEN*$BLUE killing dangerous applications$RESETCOLOR\n"
+    killall -q chrome dropbox firefox chromium skype thunderbird transmission deluge pidgin telegram discord slack signal-desktop 2>/dev/null || true
+    
+    echo -e -n " $GREEN*$BLUE cleaning cache elements$RESETCOLOR\n"
+    if command -v bleachbit > /dev/null; then
+        bleachbit -c firefox.cache chromium.cache google_chrome.cache &> /dev/null || true
+    fi
+    
+    find /tmp -name "*.tmp" -type f -delete 2>/dev/null || true
+    find /var/tmp -name "*.tmp" -type f -delete 2>/dev/null || true
+}
+
+function disable_ipv6 {
     echo -e "\n$GREEN[$BLUE i$GREEN ]$BLUE Disabling IPv6 services:$RESETCOLOR\n"
     
-    # Remove current IPv6 settings if it exists
     if [ -f /etc/sysctl.d/98-cerberus.conf ]; then
         rm /etc/sysctl.d/98-cerberus.conf
     fi
     
-    # Add comprehensive IPv6 disable configuration
     cat << EOF >> /etc/sysctl.d/98-cerberus.conf
-# Disable IPv6 - Added by Cerberus
+# Disable IPv6 - Cerberus v2.0.0
 net.ipv6.conf.all.disable_ipv6 = 1
 net.ipv6.conf.default.disable_ipv6 = 1
 net.ipv6.conf.lo.disable_ipv6 = 1
+
+# Additional network hardening
+net.ipv4.tcp_timestamps = 0
+net.ipv4.conf.all.rp_filter = 1
+net.ipv4.conf.default.rp_filter = 1
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv4.conf.default.accept_source_route = 0
+net.ipv4.icmp_echo_ignore_broadcasts = 1
+net.ipv4.icmp_ignore_bogus_error_responses = 1
 EOF
     
-    # Apply settings
     if ! sysctl -p /etc/sysctl.d/98-cerberus.conf > /dev/null 2>&1; then
         echo -e "$RED Error applying sysctl settings$RESETCOLOR"
         return 1
     fi
     
-    echo -e "$GREEN IPv6 disabled$RESETCOLOR"
+    echo -e "$GREEN IPv6 disabled and network hardened$RESETCOLOR"
     return 0
 }
 
-function enable_ipv6() {
+function enable_ipv6 {
     echo -e "\n$GREEN[$BLUE i$GREEN ]$BLUE Enabling IPv6 services:$RESETCOLOR\n"
     
-    # Remove the config file if it exists
     if [ -f /etc/sysctl.d/98-cerberus.conf ]; then
         rm -f /etc/sysctl.d/98-cerberus.conf
     fi
     
-    # Reload all sysctl settings
     if ! sysctl --system > /dev/null 2>&1; then
         echo -e "$RED Error reloading sysctl settings$RESETCOLOR"
         return 1
     fi
     
-    # Restart network services (Arch specific)
     systemctl reload NetworkManager > /dev/null 2>&1 || true
     systemctl restart systemd-resolved > /dev/null 2>&1 || true
     
@@ -211,58 +540,78 @@ function enable_ipv6() {
 }
 
 function ip {
-    echo -e "\nCurrent IP address:\n"
-    sleep 1
-    if command -v curl > /dev/null; then
-        timeout 10 curl -s "https://api.ipify.org" 2>/dev/null || echo "Unable to retrieve IP"
-    elif command -v wget > /dev/null; then
-        timeout 10 wget -qO- "https://api.ipify.org" 2>/dev/null || echo "Unable to retrieve IP"
+    echo -e "\n$BLUE Checking IP addresses...$RESETCOLOR\n"
+    
+    # Real IP (without Tor)
+    echo -e "$YELLOW Real IP (without Tor):$RESETCOLOR"
+    local real_ip=$(timeout 5 curl -sSL "https://api.ipify.org" 2>/dev/null)
+    if [ -n "$real_ip" ]; then
+        echo "  $real_ip"
     else
-        echo -e "$RED No curl or wget available$RESETCOLOR"
+        echo "  Unable to determine"
     fi
-    echo -e "\n\n----------------------------------------------------------------------"
+    
+    # Tor IP
+    echo -e "\n$GREEN Tor IP (current exit node):$RESETCOLOR"
+    local tor_ip=$(timeout 5 curl -sSL --socks5-hostname 127.0.0.1:9050 "https://api.ipify.org" 2>/dev/null)
+    if [ -n "$tor_ip" ]; then
+        echo "  $tor_ip"
+        
+        if verify_tor_exit "$tor_ip"; then
+            echo -e "  $GREEN✓ Verified Tor exit node$RESETCOLOR"
+        else
+            echo -e "  $YELLOW⚠ Unverified exit node$RESETCOLOR"
+        fi
+    else
+        echo "  Unable to connect through Tor"
+    fi
+    
+    # Check if properly anonymized
+    if [ -n "$real_ip" ] && [ -n "$tor_ip" ] && [ "$real_ip" != "$tor_ip" ]; then
+        echo -e "\n$GREEN ✓ Traffic is being anonymized$RESETCOLOR"
+    elif [ "$real_ip" = "$tor_ip" ]; then
+        echo -e "\n$RED ✗ WARNING: Traffic may not be properly anonymized!$RESETCOLOR"
+    fi
+    
+    echo -e "\n----------------------------------------------------------------------"
 }
 
 function start {
-    # Make sure only root can run this script
     if [ $(id -u) -ne 0 ]; then
         echo -e -e "\n$GREEN[$RED!$GREEN] $RED This script must be run as root$RESETCOLOR\n" >&2
         exit 1
     fi
     
-    # Check if Tor is installed
     if ! command -v tor > /dev/null; then
         echo -e "\n$GREEN[$RED!$GREEN]$RED Tor is not installed. Install with: pacman -S tor$RESETCOLOR\n" >&2
         exit 1
     fi
     
-    # Setup directories and configuration
+    setup_cerberus_directories
     setup_tor_directories
     configure_tor
+    
+    # Update exit nodes before starting
+    update_exit_nodes
     
     disable_ipv6
     
     echo -e "\n$GREEN[$BLUE i$GREEN ]$BLUE Starting Cerberus anonymous mode:$RESETCOLOR\n"
     
-    # Reload systemd in case of changes
     systemctl daemon-reload
     
-    # Start Tor with proper error handling
     if ! systemctl is-active --quiet tor; then
         echo -e " $BLUE*$BLUE Starting Tor service$RESETCOLOR\n"
         systemctl reload NetworkManager > /dev/null 2>&1 || true
         
-        # Try to start Tor service
         if ! systemctl start tor; then
             echo -e " $RED*$BLUE Tor service failed to start. Checking logs...$RESETCOLOR\n"
             journalctl -u tor.service --no-pager -n 10
             echo -e " $RED*$BLUE Attempting manual Tor start...$RESETCOLOR\n"
             
-            # Kill any existing Tor processes
             pkill -f tor || true
             sleep 2
             
-            # Try manual start
             sudo -u tor tor -f /etc/tor/torrc --verify-config
             if [ $? -eq 0 ]; then
                 sudo -u tor tor -f /etc/tor/torrc &
@@ -273,17 +622,14 @@ function start {
             fi
         fi
         
-        # Wait for Tor to fully start
         sleep 5
         
-        # Verify Tor is running
         if ! pgrep -f tor > /dev/null; then
             echo -e " $RED*$BLUE Tor failed to start properly$RESETCOLOR\n"
             exit 1
         fi
     fi
     
-    # Backup current iptables rules
     if ! [ -f /etc/iptables/iptables.rules.bak ]; then
         mkdir -p /etc/iptables
         iptables-save > /etc/iptables/iptables.rules.bak
@@ -306,10 +652,10 @@ function start {
 DNS=127.0.0.1
 FallbackDNS=209.222.18.222 209.222.18.218
 DNSStubListener=no
+DNSSEC=no
+DNSOverTLS=no
 EOF
         systemctl restart systemd-resolved
-        
-        # Create resolv.conf symlink
         ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
     else
         if [ ! -f /etc/resolv.conf.bak ]; then
@@ -322,16 +668,16 @@ nameserver 209.222.18.218
 EOF
     fi
     
-    # Wait for Tor to establish circuits
     echo -e " $BLUE*$BLUE Waiting for Tor to establish circuits...$RESETCOLOR\n"
     sleep 3
     
-    # Set iptables NAT rules
+    # Set iptables NAT rules with isolation
     iptables -t nat -A OUTPUT -m owner --uid-owner $TOR_UID -j RETURN
     iptables -t nat -A OUTPUT -p udp --dport 53 -j REDIRECT --to-ports 5354
     iptables -t nat -A OUTPUT -p tcp --dport 53 -j REDIRECT --to-ports 5354
+    iptables -t nat -A OUTPUT -p udp --dport 123 -j REDIRECT --to-ports 123
     
-    # Resolve .onion domains mapping 10.192.0.0/10 address space
+    # Resolve .onion domains
     iptables -t nat -A OUTPUT -p tcp -d 10.192.0.0/10 -j REDIRECT --to-ports 9040
     iptables -t nat -A OUTPUT -p udp -d 10.192.0.0/10 -j REDIRECT --to-ports 9040
     
@@ -362,17 +708,18 @@ EOF
     echo -e "$GREEN[$BLUE i$GREEN ]$BLUE Cerberus tunnel active$RESETCOLOR\n"
     echo -e "$GREEN[$BLUE i$GREEN ]$BLUE Verifying connection...$RESETCOLOR\n"
     
-    # Quick connection test
     sleep 2
     if timeout 10 curl -s --socks5-hostname 127.0.0.1:9050 https://check.torproject.org/ | grep -q "Congratulations"; then
         echo -e "$GREEN[$BLUE i$GREEN ]$BLUE Tor connection verified successfully$RESETCOLOR\n"
+        
+        # Show current exit node info
+        get_tor_info
     else
         echo -e "$RED[$BLUE !$RED ]$BLUE Warning: Unable to verify Tor connection$RESETCOLOR\n"
     fi
 }
 
 function stop {
-    # Make sure only root can run this script
     if [ $(id -u) -ne 0 ]; then
         echo -e "\n$GREEN[$RED!$GREEN] $RED This script must be run as root$RESETCOLOR\n" >&2
         exit 1
@@ -380,27 +727,23 @@ function stop {
     
     echo -e "\n$GREEN[$BLUE i$GREEN ]$BLUE Stopping Cerberus anonymous mode:$RESETCOLOR\n"
     
-    # Flush rules
     iptables -F
     iptables -t nat -F
     iptables -t mangle -F
     iptables -X
     
-    # Reset IPv6 tables
     ip6tables -P INPUT ACCEPT 2>/dev/null || true
     ip6tables -P OUTPUT ACCEPT 2>/dev/null || true
     ip6tables -P FORWARD ACCEPT 2>/dev/null || true
     
     echo -e " $GREEN*$BLUE Cleared iptables rules$RESETCOLOR\n"
     
-    # Restore iptables rules
     if [ -f /etc/iptables/iptables.rules.bak ]; then
         iptables-restore < /etc/iptables/iptables.rules.bak
         rm /etc/iptables/iptables.rules.bak
         echo -e " $GREEN*$BLUE Restored iptables rules$RESETCOLOR"
     fi
     
-    # Restore DNS settings
     if [ "$resolved_support" = true ]; then
         if [ -e /etc/systemd/resolved.conf.bak ]; then
             mv /etc/systemd/resolved.conf.bak /etc/systemd/resolved.conf
@@ -412,11 +755,14 @@ function stop {
         fi
     fi
     
-    # Stop Tor
     systemctl stop tor 2>/dev/null || true
     pkill -f tor 2>/dev/null || true
     
-    # Re-enable IPv6
+    # Clear ipset if used
+    if command -v ipset > /dev/null 2>&1; then
+        ipset destroy tor-exits 2>/dev/null || true
+    fi
+    
     enable_ipv6
     
     echo -e " $GREEN*$BLUE Cerberus stopped$RESETCOLOR\n"
@@ -424,105 +770,35 @@ function stop {
 
 function change {
     if systemctl is-active --quiet tor; then
-        # Method 1: Try using control port
-        if [ -f /var/lib/tor/control_auth_cookie ]; then
+        echo -e "$BLUE Changing Tor identity...$RESETCOLOR"
+        
+        # Get current IP before change
+        local old_ip=$(timeout 3 curl -sSL --socks5-hostname 127.0.0.1:9050 "https://api.ipify.org" 2>/dev/null)
+        
+        # Method 1: Control port with cookie auth
+        if [ -f /run/tor/control.authcookie ]; then
+            hexcookie=$(xxd -p -c 32 /run/tor/control.authcookie)
+            echo -e "AUTHENTICATE $hexcookie\nSIGNAL NEWNYM\nQUIT" | nc 127.0.0.1 9051 &>/dev/null
+        else
+            # Method 2: Try without auth
             echo -e "AUTHENTICATE\nSIGNAL NEWNYM\nQUIT" | nc 127.0.0.1 9051 &>/dev/null
         fi
         
-        # Method 2: Reload service
-        systemctl reload tor 2>/dev/null || systemctl restart tor
-        
-        sleep 3
-        echo -e " $GREEN*$BLUE Tor identity changed$RESETCOLOR\n"
-    else
-        echo -e " $RED*$BLUE Tor is not running$RESETCOLOR\n"
-    fi
-}
-
-function status {
-    echo -e "\n$GREEN[$BLUE i$GREEN ]$BLUE Cerberus Status:$RESETCOLOR\n"
-    
-    if systemctl is-active --quiet tor; then
-        echo -e "$GREEN ✓ Tor service is running$RESETCOLOR"
-        
-        # Check if iptables rules are active
-        if iptables -t nat -L OUTPUT | grep -q "REDIRECT"; then
-            echo -e "$GREEN ✓ Cerberus tunnel is active$RESETCOLOR"
-        else
-            echo -e "$RED ✗ Cerberus tunnel is not active$RESETCOLOR"
+        # Method 3: Reload service as fallback
+        if [ $? -ne 0 ]; then
+            systemctl reload tor 2>/dev/null || systemctl restart tor
         fi
         
-        # Check Tor connectivity
-        if timeout 5 curl -s --socks5-hostname 127.0.0.1:9050 https://check.torproject.org/ | grep -q "Congratulations"; then
-            echo -e "$GREEN ✓ Tor connection is working$RESETCOLOR"
-        else
-            echo -e "$RED ✗ Tor connection test failed$RESETCOLOR"
-        fi
-    else
-        echo -e "$RED ✗ Tor service is not running$RESETCOLOR"
-    fi
-    
-    # Check IPv6 status
-    if [ -f /etc/sysctl.d/98-cerberus.conf ]; then
-        echo -e "$GREEN ✓ IPv6 is disabled$RESETCOLOR"
-    else
-        echo -e "$BLUE ℹ IPv6 is enabled$RESETCOLOR"
-    fi
-    
-    echo ""
-}
-
-case "$1" in
-    start)
-        init
-        start
-    ;;
-    stop)
-        init
-        stop
-    ;;
-    change)
-        change
-    ;;
-    status)
-        status
-    ;;
-    myip|ip)
-        ip
-    ;;
-    starti2p)
-        starti2p
-    ;;
-    stopi2p)
-        stopi2p
-    ;;
-    restart)
-        $0 stop
-        sleep 2
-        $0 start
-    ;;
-    *)
-        echo -e "
-$RED╔═══════════════════════════════════════════════════════════════════════════════╗
-$RED║                    $GREEN Cerberus v1.0.0AlfaStable                                 $RED║
-$RED║                    $BLUE Engineered by 0xb0rn3 | 0xbv1                            $RED║
-$RED║                    $BLUE https://github.com/0xb0rn3/cerberus                      $RED║
-$RED╚═══════════════════════════════════════════════════════════════════════════════╝$RESETCOLOR
-
-Usage: cerberus {start|stop|restart|change|status|myip|starti2p|stopi2p}
-
-$GREEN start$BLUE     - Start system-wide anonymous tunneling through TOR
-$GREEN stop$BLUE      - Stop anonymous tunneling and restore original settings  
-$GREEN restart$BLUE   - Restart Cerberus (stop + start)
-$GREEN change$BLUE    - Change TOR identity (get new exit node)
-$GREEN status$BLUE    - Check if Cerberus is running
-$GREEN myip$BLUE      - Show current IP address
-$GREEN starti2p$BLUE  - Start I2P services
-$GREEN stopi2p$BLUE   - Stop I2P services
-$RESETCOLOR" >&2
-        exit 1
-    ;;
-esac
-
-echo -e $RESETCOLOR
-exit 0
+        echo -e "$BLUE Waiting for new identity...$RESETCOLOR"
+        sleep 5
+        
+        # Verify IP changed
+        local new_ip=$(timeout 3 curl -sSL --socks5-hostname 127.0.0.1:9050 "https://api.ipify.org" 2>/dev/null)
+        
+        if [ -n "$old_ip" ] && [ -n "$new_ip" ]; then
+            if [ "$old_ip" != "$new_ip" ]; then
+                echo -e "$GREEN ✓ Identity changed successfully$RESETCOLOR"
+                echo -e "$BLUE   Old IP: $old_ip$RESETCOLOR"
+                echo -e "$GREEN   New IP: $new_ip$RESETCOLOR"
+            else
+                echo -e "$YELLOW ⚠
