@@ -1,0 +1,71 @@
+# cerberus-updater.service
+[Unit]
+Description=Cerberus Tor Node List Updater
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/cerberus-updater --once
+User=root
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+
+---
+
+# cerberus-updater.timer
+[Unit]
+Description=Update Cerberus Tor node lists every 30 minutes
+Requires=cerberus-updater.service
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+
+---
+
+# cerberus.service
+[Unit]
+Description=Cerberus Anonymous Proxy Service
+After=network-online.target tor.service
+Wants=network-online.target
+Requires=tor.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/cerberus start
+ExecStop=/usr/bin/cerberus stop
+ExecReload=/usr/bin/cerberus restart
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+
+---
+
+# cerberus-monitor.service
+[Unit]
+Description=Cerberus Network Monitor
+After=cerberus.service
+Requires=cerberus.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/cerberus monitor
+Restart=on-failure
+RestartSec=10
+User=root
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
