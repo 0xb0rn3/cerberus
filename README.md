@@ -65,6 +65,7 @@ i2pd
 # Clone the repository
 git clone https://github.com/0xb0rn3/cerberus
 cd cerberus
+chmod +x install
 
 # Run installer as root
 sudo ./install
