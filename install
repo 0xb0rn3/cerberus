@@ -277,4 +277,5 @@ else
 
 # Basic network settings
 VirtualAddrNetwork 10.192.0.
+fi
 EOF
