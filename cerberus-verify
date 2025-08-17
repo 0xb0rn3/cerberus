@@ -1,0 +1,253 @@
+#!/usr/bin/env bash
+
+# Cerberus Verify v2.0.0
+# Standalone Tor exit node verification tool
+# Engineered by 0xb0rn3 | 0xbv1
+
+export BLUE='\033[1;94m'
+export GREEN='\033[1;92m'
+export RED='\033[1;91m'
+export YELLOW='\033[1;93m'
+export RESETCOLOR='\033[1;00m'
+
+CACHE_FILE="/var/lib/cerberus/cache/exit-nodes.txt"
+
+function verify_via_dns {
+    local ip="$1"
+    local reversed=$(echo "$ip" | awk -F. '{print $4"."$3"."$2"."$1}')
+    local verified=false
+    local details=""
+    
+    # Method 1: Dan.me.uk DNSBL (most detailed)
+    local result=$(host -W 2 "${reversed}.torexit.dan.me.uk" 2>/dev/null)
+    if echo "$result" | grep -q "127.0.0.100"; then
+        verified=true
+        details="Dan.me.uk DNSBL"
+        
+        # Try to get TXT record for more info
+        local txt=$(host -t TXT -W 2 "${reversed}.torexit.dan.me.uk" 2>/dev/null | grep -oP '"[^"]+"' | tr -d '"')
+        if [ -n "$txt" ]; then
+            details="$details ($txt)"
+        fi
+    fi
+    
+    # Method 2: Tor Project DNSEL
+    if [ "$verified" = false ]; then
+        if host -W 2 "${reversed}.dnsel.torproject.org" 2>/dev/null | grep -q "127.0.0.2"; then
+            verified=true
+            details="Tor Project DNSEL"
+        fi
+    fi
+    
+    # Method 3: Dan.me.uk tor.dan.me.uk
+    if [ "$verified" = false ]; then
+        if host -W 2 "${reversed}.tor.dan.me.uk" 2>/dev/null | grep -q "127.0.0."; then
+            verified=true
+            details="Dan.me.uk Tor list"
+        fi
+    fi
+    
+    if [ "$verified" = true ]; then
+        echo -e "$GREEN ✓ VERIFIED$RESETCOLOR via $details"
+        return 0
+    else
+        return 1
+    fi
+}
+
+function verify_via_cache {
+    local ip="$1"
+    
+    if [ -f "$CACHE_FILE" ]; then
+        if grep -q "^${ip}$" "$CACHE_FILE" 2>/dev/null; then
+            local last_update=$(stat -c %y "$CACHE_FILE" | cut -d'.' -f1)
+            echo -e "$YELLOW ✓ CACHED$RESETCOLOR (updated: $last_update)"
+            return 0
+        fi
+    fi
+    
+    return 1
+}
+
+function get_ip_info {
+    local ip="$1"
+    
+    # Try to get geolocation and ISP info
+    local info=$(timeout 3 curl -sSL "http://ip-api.com/json/$ip" 2>/dev/null)
+    
+    if [ -n "$info" ]; then
+        local country=$(echo "$info" | grep -oP '"country":"[^"]+' | cut -d'"' -f4)
+        local city=$(echo "$info" | grep -oP '"city":"[^"]+' | cut -d'"' -f4)
+        local isp=$(echo "$info" | grep -oP '"isp":"[^"]+' | cut -d'"' -f4)
+        local as=$(echo "$info" | grep -oP '"as":"[^"]+' | cut -d'"' -f4)
+        
+        echo -e "$BLUE Location:$RESETCOLOR ${city:-Unknown}, ${country:-Unknown}"
+        echo -e "$BLUE ISP/ASN:$RESETCOLOR ${isp:-Unknown} (${as:-Unknown})"
+    fi
+}
+
+function batch_verify {
+    local file="$1"
+    local verified=0
+    local cached=0
+    local not_exit=0
+    local total=0
+    
+    echo -e "$BLUE Verifying IPs from $file...$RESETCOLOR\n"
+    
+    while IFS= read -r ip; do
+        # Skip comments and empty lines
+        [[ "$ip" =~ ^#.*$ ]] && continue
+        [[ -z "$ip" ]] && continue
+        
+        ((total++))
+        echo -n "[$total] $ip: "
+        
+        if verify_via_dns "$ip"; then
+            ((verified++))
+        elif verify_via_cache "$ip"; then
+            ((cached++))
+        else
+            echo -e "$RED ✗ NOT A TOR EXIT$RESETCOLOR"
+            ((not_exit++))
+        fi
+    done < "$file"
+    
+    echo -e "\n$BLUE Summary:$RESETCOLOR"
+    echo -e "  Total checked: $total"
+    echo -e "  $GREEN Verified: $verified$RESETCOLOR"
+    echo -e "  $YELLOW Cached: $cached$RESETCOLOR"
+    echo -e "  $RED Not exits: $not_exit$RESETCOLOR"
+}
+
+function show_help {
+    echo -e "$RED╔═══════════════════════════════════════════════════════════════════════════════╗"
+    echo -e "$RED║                    $GREEN Cerberus Verify v2.0.0                                    $RED║"
+    echo -e "$RED║                    $BLUE Tor Exit Node Verification Tool                          $RED║"
+    echo -e "$RED╚═══════════════════════════════════════════════════════════════════════════════╝$RESETCOLOR"
+    echo ""
+    echo "Usage: cerberus-verify [OPTIONS] <IP_ADDRESS>"
+    echo ""
+    echo "Options:"
+    echo "  -h, --help       Show this help message"
+    echo "  -i, --info       Show additional IP information"
+    echo "  -b, --batch FILE Verify multiple IPs from file"
+    echo "  -q, --quiet      Quiet mode (exit code only)"
+    echo "  -v, --verbose    Verbose output"
+    echo ""
+    echo "Examples:"
+    echo "  cerberus-verify 185.220.101.1"
+    echo "  cerberus-verify --info 185.220.101.1"
+    echo "  cerberus-verify --batch ip-list.txt"
+    echo "  echo '185.220.101.1' | cerberus-verify"
+    echo ""
+    echo "Exit codes:"
+    echo "  0 - IP is a Tor exit node"
+    echo "  1 - IP is NOT a Tor exit node"
+    echo "  2 - Error occurred"
+}
+
+# Parse arguments
+SHOW_INFO=false
+QUIET_MODE=false
+VERBOSE_MODE=false
+BATCH_FILE=""
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        -i|--info)
+            SHOW_INFO=true
+            shift
+            ;;
+        -b|--batch)
+            BATCH_FILE="$2"
+            shift 2
+            ;;
+        -q|--quiet)
+            QUIET_MODE=true
+            shift
+            ;;
+        -v|--verbose)
+            VERBOSE_MODE=true
+            shift
+            ;;
+        *)
+            IP="$1"
+            shift
+            ;;
+    esac
+done
+
+# Batch mode
+if [ -n "$BATCH_FILE" ]; then
+    if [ ! -f "$BATCH_FILE" ]; then
+        echo -e "$RED Error: File $BATCH_FILE not found$RESETCOLOR"
+        exit 2
+    fi
+    batch_verify "$BATCH_FILE"
+    exit 0
+fi
+
+# Read from stdin if no IP provided
+if [ -z "$IP" ]; then
+    if [ -t 0 ]; then
+        show_help
+        exit 2
+    else
+        read -r IP
+    fi
+fi
+
+# Validate IP format
+if ! [[ "$IP" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+    [ "$QUIET_MODE" = false ] && echo -e "$RED Error: Invalid IP address format$RESETCOLOR"
+    exit 2
+fi
+
+# Main verification
+if [ "$QUIET_MODE" = false ]; then
+    echo -e "$BLUE Verifying:$RESETCOLOR $IP"
+    echo ""
+fi
+
+# Check DNS verification
+dns_verified=false
+if [ "$VERBOSE_MODE" = true ] && [ "$QUIET_MODE" = false ]; then
+    echo -e "$BLUE Checking DNS blacklists...$RESETCOLOR"
+fi
+
+if verify_via_dns "$IP"; then
+    dns_verified=true
+elif [ "$QUIET_MODE" = false ]; then
+    # Check cache as fallback
+    if verify_via_cache "$IP"; then
+        dns_verified=true
+    else
+        echo -e "$RED ✗ NOT VERIFIED$RESETCOLOR as Tor exit node"
+    fi
+fi
+
+# Show additional info if requested
+if [ "$SHOW_INFO" = true ] && [ "$QUIET_MODE" = false ]; then
+    echo ""
+    get_ip_info "$IP"
+fi
+
+# Summary
+if [ "$QUIET_MODE" = false ]; then
+    echo ""
+    if [ "$dns_verified" = true ]; then
+        echo -e "$GREEN Result: $IP is a Tor exit node$RESETCOLOR"
+        exit 0
+    else
+        echo -e "$RED Result: $IP is NOT a Tor exit node$RESETCOLOR"
+        exit 1
+    fi
+else
+    # Quiet mode - exit code only
+    [ "$dns_verified" = true ] && exit 0 || exit 1
+fi
