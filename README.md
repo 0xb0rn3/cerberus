@@ -432,7 +432,57 @@ sudo ip6tables -P INPUT ACCEPT
 sudo ip6tables -P OUTPUT ACCEPT
 sudo systemctl restart NetworkManager
 ```
+### Tor service is masked 
+```bash
+1. Fix the Masked Tor Service
+The tor.service is currently masked, which prevents it from starting. Run these commands:
+# Unmask the tor service
+sudo systemctl unmask tor.service
 
+# Enable the tor service
+sudo systemctl enable tor.service
+
+# Check if tor service can start now
+sudo systemctl start tor.service
+
+# Verify status
+sudo systemctl status tor.service
+'''
+2. Fix Package Conflicts
+# Remove the conflicting package
+sudo pacman -R openbsd-netcat
+
+# Install gnu-netcat
+sudo pacman -S gnu-netcat
+
+# Re-run the installer if needed
+sudo ./install
+```
+
+Complete System Reset and Restart
+If the above doesn't work, try a complete reset:
+```bash
+# Stop all cerberus processes
+sudo cerberus stop
+
+# Kill any remaining tor processes
+sudo pkill -f tor
+
+# Remove any existing tor lock files
+sudo rm -f /run/tor/tor.pid
+sudo rm -f /var/lib/tor/lock
+
+# Reset tor directories permissions
+sudo chown -R tor:tor /var/lib/tor
+sudo chown -R tor:tor /var/log/tor  
+sudo chown -R tor:tor /run/tor
+
+# Try starting tor manually first
+sudo systemctl start tor.service
+
+# If successful, try cerberus
+sudo cerberus start
+```
 ## 🔒 Security Considerations
 
 ### ⚠️ Important Warnings
