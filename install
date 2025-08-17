@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Cerberus Installer v2.0.0
+# Cerberus Installer v2.1.0
 # Engineered by 0xb0rn3 | 0xbv1
 # Repository: https://github.com/0xb0rn3/cerberus
 
@@ -17,7 +17,7 @@ if [ $(id -u) -ne 0 ]; then
 fi
 
 echo -e "$RED╔═══════════════════════════════════════════════════════════════════════════════╗
-$RED║                    $GREEN Cerberus v2.0.0 Installer                                 $RED║
+$RED║                    $GREEN Cerberus v2.1.0 Installer                                 $RED║
 $RED║                    $BLUE Engineered by 0xb0rn3 | 0xbv1                            $RED║
 $RED║                    $BLUE https://github.com/0xb0rn3/cerberus                      $RED║
 $RED╚═══════════════════════════════════════════════════════════════════════════════╝$RESETCOLOR\n"
