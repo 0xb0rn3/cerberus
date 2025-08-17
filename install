@@ -28,13 +28,20 @@ echo -e "$GREEN Installing Cerberus dependencies...$RESETCOLOR"
 echo -e "$BLUE Updating system packages...$RESETCOLOR"
 pacman -Sy
 
-# Install core dependencies
+# Handle netcat conflict
+echo -e "$BLUE Resolving netcat package conflicts...$RESETCOLOR"
+if pacman -Q openbsd-netcat > /dev/null 2>&1; then
+    echo -e "$YELLOW Removing openbsd-netcat to install gnu-netcat...$RESETCOLOR"
+    pacman -R openbsd-netcat --noconfirm 2>/dev/null || true
+fi
+
+# Install core dependencies (fixed package list)
 echo -e "$BLUE Installing core packages...$RESETCOLOR"
-pacman -S --needed --noconfirm tor iptables ipset secure-delete curl wget nyx torsocks gnu-netcat xxd bind
+pacman -S --needed --noconfirm tor iptables ipset secure-delete curl wget bind gnu-netcat
 
 # Install optional monitoring tools
 echo -e "$BLUE Installing optional monitoring tools...$RESETCOLOR"
-pacman -S --needed --noconfirm htop iftop nethogs vnstat --noconfirm 2>/dev/null || true
+pacman -S --needed --noconfirm htop iftop nethogs vnstat nyx torsocks xxd --noconfirm 2>/dev/null || true
 
 # Install optional I2P support
 echo -e "$BLUE Do you want to install I2P support? (y/N)$RESETCOLOR"
@@ -42,9 +49,9 @@ read -r install_i2p
 if [[ $install_i2p =~ ^[Yy]$ ]]; then
     echo -e "$BLUE Installing I2P...$RESETCOLOR"
     if command -v yay > /dev/null; then
-        yay -S --needed --noconfirm i2pd
+        sudo -u $(logname) yay -S --needed --noconfirm i2pd 2>/dev/null || echo -e "$YELLOW Failed to install I2P via yay$RESETCOLOR"
     elif command -v paru > /dev/null; then
-        paru -S --needed --noconfirm i2pd
+        sudo -u $(logname) paru -S --needed --noconfirm i2pd 2>/dev/null || echo -e "$YELLOW Failed to install I2P via paru$RESETCOLOR"
     else
         echo -e "$YELLOW AUR helper not found. Skipping I2P installation.$RESETCOLOR"
     fi
@@ -58,6 +65,13 @@ mkdir -p /var/lib/cerberus/cache
 mkdir -p /var/lib/tor
 mkdir -p /var/log/tor
 mkdir -p /run/tor
+mkdir -p /usr/local/bin
+
+# Create tor user if it doesn't exist
+if ! id -u tor > /dev/null 2>&1; then
+    echo -e "$BLUE Creating tor user...$RESETCOLOR"
+    useradd -r -s /bin/false -d /var/lib/tor -c "Tor daemon user" tor
+fi
 
 # Set proper ownership and permissions
 echo -e "$BLUE Setting up permissions...$RESETCOLOR"
@@ -71,12 +85,6 @@ chmod 755 /var/lib/cerberus
 chmod 755 /var/lib/cerberus/cache
 chmod 755 /var/log/cerberus
 
-# Create tor user if it doesn't exist
-if ! id -u tor > /dev/null 2>&1; then
-    echo -e "$BLUE Creating tor user...$RESETCOLOR"
-    useradd -r -s /bin/false -d /var/lib/tor -c "Tor daemon user" tor
-fi
-
 # Install main scripts
 echo -e "$BLUE Installing Cerberus scripts...$RESETCOLOR"
 cp cerberus /usr/bin/cerberus
@@ -86,9 +94,14 @@ chmod +x /usr/bin/cerberus
 chmod +x /usr/bin/cerberus-pandora
 chmod +x /usr/bin/cerberus-updater
 
+# Install optional cerberus-verify if it exists
+if [ -f cerberus-verify ]; then
+    cp cerberus-verify /usr/bin/cerberus-verify
+    chmod +x /usr/bin/cerberus-verify
+fi
+
 # Install configuration files
 echo -e "$BLUE Installing configuration files...$RESETCOLOR"
-cp torrc.cerberus /etc/tor/torrc.cerberus
 cp cerberus.pac /etc/cerberus/cerberus.pac
 
 # Backup original torrc if it exists
@@ -99,8 +112,11 @@ fi
 # Install systemd services
 echo -e "$BLUE Installing systemd services...$RESETCOLOR"
 
-# Extract individual service files from cerberus-services
-cat > /etc/systemd/system/cerberus-updater.service << 'EOF'
+# Extract individual service files from cerberus-services or use individual files
+if [ -f cerberus-updater.service ]; then
+    cp cerberus-updater.service /etc/systemd/system/cerberus-updater.service
+else
+    cat > /etc/systemd/system/cerberus-updater.service << 'EOF'
 [Unit]
 Description=Cerberus Tor Node List Updater
 After=network-online.target
@@ -116,6 +132,7 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 EOF
+fi
 
 cat > /etc/systemd/system/cerberus-updater.timer << 'EOF'
 [Unit]
@@ -151,9 +168,31 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 
+# Install cerberus-monitor service
+cat > /etc/systemd/system/cerberus-monitor.service << 'EOF'
+[Unit]
+Description=Cerberus Network Monitor
+After=cerberus.service
+Requires=cerberus.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/cerberus monitor
+Restart=on-failure
+RestartSec=10
+User=root
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 # Keep the pandora service
-cp cerberus-pandora.service /etc/systemd/system/cerberus-pandora.service 2>/dev/null || \
-cat > /etc/systemd/system/cerberus-pandora.service << 'EOF'
+if [ -f cerberus-pandora.service ]; then
+    cp cerberus-pandora.service /etc/systemd/system/cerberus-pandora.service
+else
+    cat > /etc/systemd/system/cerberus-pandora.service << 'EOF'
 [Unit]
 Description=Cerberus Pandora RAM cleaner
 After=umount.target
@@ -169,6 +208,7 @@ ExecStop=/usr/bin/cerberus-pandora bomb
 [Install]
 WantedBy=shutdown.target
 EOF
+fi
 
 # Reload systemd
 systemctl daemon-reload
@@ -178,10 +218,10 @@ echo -e "$BLUE Enabling systemd services...$RESETCOLOR"
 systemctl enable cerberus-pandora.service
 systemctl enable cerberus-updater.timer
 
-# Configure Tor
+# Configure Tor with fixed configuration
 echo -e "$BLUE Configuring Tor...$RESETCOLOR"
 cat > /etc/tor/torrc << 'EOF'
-# Cerberus Tor Configuration v2.0.0
+# Cerberus Tor Configuration v2.1.0
 
 # Network settings
 VirtualAddrNetwork 10.192.0.0/10
@@ -194,7 +234,6 @@ RunAsDaemon 1
 # Security settings
 AvoidDiskWrites 1
 DataDirectory /var/lib/tor
-User tor
 PidFile /run/tor/tor.pid
 
 # Control port for identity changes and monitoring
@@ -204,21 +243,15 @@ CookieAuthFileGroupReadable 1
 CookieAuthFile /run/tor/control.authcookie
 
 # Performance optimizations
-NumCPUs 2
 CircuitBuildTimeout 10
 LearnCircuitBuildTimeout 0
-CircuitIdleTimeout 60
-CircuitStreamTimeout 60
 ClientOnly 1
-ExcludeSingleHopRelays 1
-EnforceDistinctSubnets 1
 NewCircuitPeriod 30
 MaxCircuitDirtiness 600
 
 # Connection settings
 KeepAlivePeriod 60
 ConnLimit 2048
-ReducedConnectionPadding 1
 
 # Logging
 Log notice file /var/log/tor/notices.log
@@ -236,72 +269,11 @@ echo -e "$BLUE Testing Tor configuration...$RESETCOLOR"
 if sudo -u tor tor --verify-config -f /etc/tor/torrc; then
     echo -e "$GREEN Tor configuration is valid$RESETCOLOR"
 else
-    echo -e "$RED Tor configuration has errors$RESETCOLOR"
-    exit 1
-fi
-
-# Initial node list update
-echo -e "$BLUE Performing initial node list update...$RESETCOLOR"
-/usr/bin/cerberus-updater --once
-
-# Start services
-echo -e "$BLUE Starting services...$RESETCOLOR"
-systemctl enable tor
-systemctl start tor
-systemctl start cerberus-updater.timer
-
-# Wait for Tor to start
-sleep 5
-
-# Verify Tor is running
-if systemctl is-active --quiet tor; then
-    echo -e "$GREEN Tor service started successfully$RESETCOLOR"
-else
-    echo -e "$RED Tor service failed to start. Checking logs...$RESETCOLOR"
-    journalctl -u tor.service --no-pager -n 10
-fi
-
-echo -e "\n$GREEN Cerberus v2.0.0 installation completed successfully!$RESETCOLOR\n"
-
-echo -e "$BLUE Core Commands:$RESETCOLOR"
-echo -e "$GREEN cerberus start$BLUE         - Start anonymous tunneling$RESETCOLOR"
-echo -e "$GREEN cerberus stop$BLUE          - Stop anonymous tunneling$RESETCOLOR"
-echo -e "$GREEN cerberus status$BLUE        - Check status$RESETCOLOR"
-echo -e "$GREEN cerberus myip$BLUE          - Show current IP$RESETCOLOR"
-echo -e "$GREEN cerberus change$BLUE        - Change Tor identity$RESETCOLOR"
-
-echo -e "\n$BLUE New Commands:$RESETCOLOR"
-echo -e "$GREEN cerberus info$BLUE          - Show Tor network information$RESETCOLOR"
-echo -e "$GREEN cerberus monitor$BLUE       - Real-time network monitoring$RESETCOLOR"
-echo -e "$GREEN cerberus update-nodes$BLUE  - Update exit node database$RESETCOLOR"
-echo -e "$GREEN cerberus verify <IP>$BLUE   - Check if IP is Tor exit$RESETCOLOR"
-
-echo -e "\n$BLUE System Commands:$RESETCOLOR"
-echo -e "$GREEN systemctl start cerberus$BLUE     - Start as service$RESETCOLOR"
-echo -e "$GREEN systemctl status cerberus$BLUE    - Service status$RESETCOLOR"
-echo -e "$GREEN journalctl -u cerberus$BLUE       - View logs$RESETCOLOR"
-
-echo -e "\n$GREEN Testing Tor connectivity...$RESETCOLOR"
-if timeout 10 curl -s --socks5-hostname 127.0.0.1:9050 https://check.torproject.org/ | grep -q "Congratulations"; then
-    echo -e "$GREEN ✓ Tor is working correctly!$RESETCOLOR"
+    echo -e "$RED Tor configuration has errors, attempting to fix...$RESETCOLOR"
     
-    # Show current exit node
-    current_ip=$(timeout 5 curl -sSL --socks5-hostname 127.0.0.1:9050 "https://api.ipify.org" 2>/dev/null)
-    if [ -n "$current_ip" ]; then
-        echo -e "$GREEN ✓ Current exit node: $current_ip$RESETCOLOR"
-    fi
-else
-    echo -e "$YELLOW ⚠ Tor connectivity test failed. This is normal during initial setup.$RESETCOLOR"
-    echo -e "$BLUE   Try: cerberus start$RESETCOLOR"
-fi
+    # Create minimal working configuration
+    cat > /etc/tor/torrc << 'EOF'
+# Cerberus Tor Configuration v2.1.0 - Minimal
 
-# Show node database status
-if [ -f /var/lib/cerberus/cache/exit-nodes.txt ]; then
-    node_count=$(wc -l < /var/lib/cerberus/cache/exit-nodes.txt)
-    echo -e "$GREEN ✓ Exit node database: $node_count nodes loaded$RESETCOLOR"
-fi
-
-echo -e "\n$RED WARNING: Always verify your IP address after starting Cerberus!$RESETCOLOR"
-echo -e "$BLUE Run: cerberus myip$RESETCOLOR\n"
-
-exit 0
+# Basic network settings
+VirtualAddrNetwork 10.192.0.
