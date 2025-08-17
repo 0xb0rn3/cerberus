@@ -1,4 +1,8 @@
-# Basic settings
+# Cerberus Tor Configuration v2.1.0 - Production Ready
+# Compatible with modern Tor versions
+# Engineered by 0xb0rn3 | 0xbv1
+
+# Basic network settings
 VirtualAddrNetwork 10.192.0.0/10
 AutomapHostsOnResolve 1
 TransPort 9040
@@ -6,13 +10,33 @@ SocksPort 9050
 DNSPort 5354
 RunAsDaemon 1
 
-# Security settings
+# Security and privacy settings
 AvoidDiskWrites 1
 DataDirectory /var/lib/tor
-
-# User configuration
-User tor
 PidFile /run/tor/tor.pid
 
-# Logging - only if log directory exists
+# Control port for identity changes and monitoring
+ControlPort 9051
+CookieAuthentication 1
+CookieAuthFileGroupReadable 1
+CookieAuthFile /run/tor/control.authcookie
+
+# Performance optimizations
+CircuitBuildTimeout 10
+LearnCircuitBuildTimeout 0
+ClientOnly 1
+NewCircuitPeriod 30
+MaxCircuitDirtiness 600
+
+# Connection settings
+KeepAlivePeriod 60
+ConnLimit 2048
+
+# Logging
 Log notice file /var/log/tor/notices.log
+
+# Exit policy (reject all - client only)
+ExitPolicy reject *:*
+
+# Additional hardening
+DisableDebuggerAttachment 1
