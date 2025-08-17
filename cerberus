@@ -10,9 +10,10 @@
 # Short-Description: Transparent Proxy through TOR.
 ### END INIT INFO
 
-# Cerberus v2.0.0 - Transparent Proxy through TOR with Advanced Network Integration
+# Cerberus v2.1.0 - Enhanced with Self-Healing Tor Service Management
 # Engineered by 0xb0rn3 | 0xbv1
 # Repository: https://github.com/0xb0rn3/cerberus
+# Now includes automatic detection and repair of masked tor.service issues
 
 export BLUE='\033[1;94m'
 export GREEN='\033[1;92m'
@@ -39,12 +40,230 @@ EXIT_NODES_FILE="$CERBERUS_CACHE/exit-nodes.txt"
 ALL_NODES_FILE="$CERBERUS_CACHE/all-nodes.txt"
 NODE_METADATA="$CERBERUS_CACHE/node-metadata.json"
 
+# Self-healing configuration
+SELF_HEALING_SCRIPT="/usr/local/bin/tor-self-healing"
+TOR_SERVICE="tor.service"
+TOR_UNIT_PATH="/usr/lib/systemd/system/tor.service"
+
 # Check if systemd-resolved is active
 if systemctl is-active --quiet systemd-resolved; then
     resolved_support=true
 else
     resolved_support=false
 fi
+
+# Enhanced logging function with self-healing context
+log_message() {
+    local message="$1"
+    local level="${2:-INFO}"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    
+    # Log to cerberus log file
+    echo "[$timestamp] [$level] $message" >> "$CERBERUS_LOGS/cerberus.log" 2>/dev/null
+    
+    # Display to console if interactive
+    if [ -t 1 ]; then
+        echo -e "$message"
+    fi
+}
+
+# Install self-healing script if not present
+install_self_healing_script() {
+    if [ ! -f "$SELF_HEALING_SCRIPT" ]; then
+        log_message "$BLUE Installing Tor self-healing script...$RESETCOLOR"
+        
+        # Create the self-healing script inline (embedded version)
+        cat > "$SELF_HEALING_SCRIPT" << 'HEALING_SCRIPT_EOF'
+#!/usr/bin/env bash
+# Embedded Tor Self-Healing Script for Cerberus
+# Quick repair version - focuses on the core fix
+
+TOR_UNIT_PATH="/usr/lib/systemd/system/tor.service"
+LOG_FILE="/var/log/cerberus/tor-healing.log"
+
+log_healing() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+}
+
+detect_corruption() {
+    if [ ! -f "$TOR_UNIT_PATH" ]; then
+        return 1
+    fi
+    
+    local file_size=$(stat -c%s "$TOR_UNIT_PATH" 2>/dev/null || echo "-1")
+    [ "$file_size" -eq 0 ] && return 0 || return 1
+}
+
+fix_tor_service() {
+    log_healing "HEALING: Detected corrupted tor.service, attempting repair..."
+    
+    # Stop tor service
+    systemctl stop tor.service 2>/dev/null || true
+    pkill -f tor 2>/dev/null || true
+    
+    # Backup current torrc if exists
+    [ -f /etc/tor/torrc ] && [ ! -f /etc/tor/torrc.backup ] && cp /etc/tor/torrc /etc/tor/torrc.backup
+    
+    # Reinstall tor package with overwrite
+    log_healing "HEALING: Reinstalling tor package..."
+    if pacman -S tor --overwrite "*" --noconfirm >/dev/null 2>&1; then
+        log_healing "HEALING: Package reinstall successful"
+        
+        # Handle .pacnew files
+        if [ -f /etc/tor/torrc.pacnew ]; then
+            local timestamp=$(date +%Y%m%d-%H%M%S)
+            [ -f /etc/tor/torrc ] && mv /etc/tor/torrc "/etc/tor/torrc.old-$timestamp"
+            mv /etc/tor/torrc.pacnew /etc/tor/torrc
+            chown root:root /etc/tor/torrc
+            chmod 644 /etc/tor/torrc
+            log_healing "HEALING: Configuration files updated"
+        fi
+        
+        # Reload systemd and test
+        systemctl daemon-reload
+        
+        if [ $(stat -c%s "$TOR_UNIT_PATH" 2>/dev/null || echo "0") -gt 0 ]; then
+            log_healing "HEALING: Unit file restored successfully"
+            return 0
+        fi
+    fi
+    
+    log_healing "HEALING: Failed to repair tor.service"
+    return 1
+}
+
+# Quick healing function for integration
+if [ "$1" = "--quick-heal" ]; then
+    if detect_corruption || systemctl status tor.service 2>&1 | grep -q "masked"; then
+        fix_tor_service
+        exit $?
+    else
+        exit 2  # No healing needed
+    fi
+fi
+
+# Full healing process
+if detect_corruption; then
+    fix_tor_service
+else
+    log_healing "HEALING: No corruption detected"
+    exit 2
+fi
+HEALING_SCRIPT_EOF
+        
+        chmod +x "$SELF_HEALING_SCRIPT"
+        log_message "$GREEN ✓ Self-healing script installed$RESETCOLOR"
+    fi
+}
+
+# Enhanced function to check and auto-heal Tor service issues
+check_and_heal_tor_service() {
+    local context="${1:-general}"
+    local attempt_healing="${2:-true}"
+    
+    log_message "$BLUE Checking Tor service health (context: $context)...$RESETCOLOR"
+    
+    # Quick check for obvious issues
+    local service_masked=false
+    local unit_corrupted=false
+    local service_failed=false
+    
+    # Check if service is masked
+    if systemctl status tor.service 2>&1 | grep -q "masked"; then
+        service_masked=true
+        log_message "$RED ⚠ Detected: tor.service is MASKED$RESETCOLOR" "WARN"
+    fi
+    
+    # Check for zero-byte unit file (root cause)
+    if [ -f "$TOR_UNIT_PATH" ]; then
+        local file_size=$(stat -c%s "$TOR_UNIT_PATH" 2>/dev/null || echo "-1")
+        if [ "$file_size" -eq 0 ]; then
+            unit_corrupted=true
+            log_message "$RED ⚠ Detected: Corrupted unit file (0 bytes) - this causes masking$RESETCOLOR" "WARN"
+        fi
+    fi
+    
+    # Check if service is in failed state
+    if systemctl is-failed --quiet tor.service; then
+        service_failed=true
+        log_message "$RED ⚠ Detected: tor.service is in failed state$RESETCOLOR" "WARN"
+    fi
+    
+    # If issues detected and healing is enabled, attempt repair
+    if ($service_masked || $unit_corrupted || $service_failed) && [ "$attempt_healing" = "true" ]; then
+        log_message "$YELLOW Tor service issues detected, initiating self-healing...$RESETCOLOR" "WARN"
+        
+        # Install healing script if needed
+        install_self_healing_script
+        
+        # Attempt quick healing
+        if "$SELF_HEALING_SCRIPT" --quick-heal >/dev/null 2>&1; then
+            local exit_code=$?
+            
+            if [ $exit_code -eq 0 ]; then
+                log_message "$GREEN ✓ Self-healing successful: Tor service repaired$RESETCOLOR" "INFO"
+                
+                # Verify the fix
+                systemctl daemon-reload
+                sleep 2
+                
+                if systemctl start tor.service && systemctl is-active --quiet tor.service; then
+                    log_message "$GREEN ✓ Tor service is now running properly$RESETCOLOR" "INFO"
+                    return 0
+                else
+                    log_message "$YELLOW ⚠ Self-healing completed but service still has issues$RESETCOLOR" "WARN"
+                    return 1
+                fi
+            elif [ $exit_code -eq 2 ]; then
+                log_message "$BLUE ℹ No healing was needed$RESETCOLOR" "INFO"
+                return 0
+            else
+                log_message "$RED ✗ Self-healing failed$RESETCOLOR" "ERROR"
+                return 1
+            fi
+        else
+            log_message "$RED ✗ Could not execute self-healing script$RESETCOLOR" "ERROR"
+            return 1
+        fi
+    elif $service_masked || $unit_corrupted || $service_failed; then
+        log_message "$YELLOW ⚠ Tor service issues detected but auto-healing is disabled$RESETCOLOR" "WARN"
+        log_message "$BLUE Recommendation: Run 'cerberus heal-tor' to fix issues$RESETCOLOR" "INFO"
+        return 1
+    else
+        log_message "$GREEN ✓ Tor service appears healthy$RESETCOLOR" "INFO"
+        return 0
+    fi
+}
+
+# Manual healing command
+heal_tor_service() {
+    log_message "$BLUE Manual Tor service healing initiated...$RESETCOLOR"
+    
+    install_self_healing_script
+    
+    echo -e "$YELLOW This will attempt to fix masked tor.service issues by:"
+    echo -e "$BLUE • Reinstalling the tor package to fix corrupted unit files"
+    echo -e "$BLUE • Handling configuration conflicts automatically"
+    echo -e "$BLUE • Restoring proper service functionality$RESETCOLOR"
+    echo ""
+    echo -e "$YELLOW Proceed with healing? (y/N)$RESETCOLOR"
+    read -r confirm_heal
+    
+    if [[ ! "$confirm_heal" =~ ^[Yy]$ ]]; then
+        log_message "$BLUE Healing cancelled by user$RESETCOLOR"
+        return 0
+    fi
+    
+    # Run full healing script
+    if "$SELF_HEALING_SCRIPT"; then
+        log_message "$GREEN ✓ Tor service healing completed successfully$RESETCOLOR"
+        return 0
+    else
+        log_message "$RED ✗ Tor service healing failed$RESETCOLOR"
+        log_message "$BLUE Check logs at: /var/log/cerberus/tor-healing.log$RESETCOLOR"
+        return 1
+    fi
+}
 
 function setup_cerberus_directories {
     mkdir -p "$CERBERUS_DIR"
@@ -75,7 +294,7 @@ function configure_tor {
     fi
     
     cat > /etc/tor/torrc << 'EOF'
-# Cerberus Tor Configuration v2.0.0
+# Cerberus Tor Configuration v2.1.0
 
 # Network settings
 VirtualAddrNetwork 10.192.0.0/10
@@ -267,7 +486,7 @@ function monitor_tor {
     while true; do
         clear
         echo -e "$RED╔═══════════════════════════════════════════════════════════════════════════════╗"
-        echo -e "$RED║                    $GREEN Cerberus v2.0.0 - Tor Network Monitor                    $RED║"
+        echo -e "$RED║                    $GREEN Cerberus v2.1.0 - Tor Network Monitor                    $RED║"
         echo -e "$RED╚═══════════════════════════════════════════════════════════════════════════════╝$RESETCOLOR\n"
         
         # Current status
@@ -330,7 +549,7 @@ function disable_ipv6 {
     fi
     
     cat << EOF >> /etc/sysctl.d/98-cerberus.conf
-# Disable IPv6 - Cerberus v2.0.0
+# Disable IPv6 - Cerberus v2.1.0
 net.ipv6.conf.all.disable_ipv6 = 1
 net.ipv6.conf.default.disable_ipv6 = 1
 net.ipv6.conf.lo.disable_ipv6 = 1
@@ -429,6 +648,14 @@ function start {
     setup_tor_directories
     configure_tor
     
+    # Enhanced pre-start check with self-healing
+    log_message "$BLUE Performing pre-start health check...$RESETCOLOR"
+    if ! check_and_heal_tor_service "pre-start" "true"; then
+        echo -e "$RED ✗ Could not resolve Tor service issues. Manual intervention may be required.$RESETCOLOR"
+        echo -e "$BLUE Try running: cerberus heal-tor$RESETCOLOR"
+        exit 1
+    fi
+    
     # Update exit nodes before starting
     update_exit_nodes
     
@@ -442,29 +669,54 @@ function start {
         echo -e " $BLUE*$BLUE Starting Tor service$RESETCOLOR\n"
         systemctl reload NetworkManager > /dev/null 2>&1 || true
         
-        if ! systemctl start tor; then
-            echo -e " $RED*$BLUE Tor service failed to start. Checking logs...$RESETCOLOR\n"
-            journalctl -u tor.service --no-pager -n 10
-            echo -e " $RED*$BLUE Attempting manual Tor start...$RESETCOLOR\n"
-            
-            pkill -f tor || true
-            sleep 2
-            
-            sudo -u tor tor -f /etc/tor/torrc --verify-config
-            if [ $? -eq 0 ]; then
-                sudo -u tor tor -f /etc/tor/torrc &
-                sleep 3
+        # Enhanced start with healing retry
+        local start_attempts=0
+        local max_attempts=3
+        
+        while [ $start_attempts -lt $max_attempts ]; do
+            if systemctl start tor; then
+                echo -e " $GREEN*$BLUE Tor service started successfully$RESETCOLOR\n"
+                break
             else
-                echo -e " $RED*$BLUE Tor configuration verification failed$RESETCOLOR\n"
-                exit 1
+                ((start_attempts++))
+                echo -e " $RED*$BLUE Tor service failed to start (attempt $start_attempts/$max_attempts)$RESETCOLOR\n"
+                
+                if [ $start_attempts -lt $max_attempts ]; then
+                    echo -e " $YELLOW*$BLUE Attempting auto-repair and retry...$RESETCOLOR\n"
+                    
+                    # Attempt healing
+                    if check_and_heal_tor_service "start-retry" "true"; then
+                        echo -e " $GREEN*$BLUE Auto-repair successful, retrying start...$RESETCOLOR\n"
+                        sleep 2
+                        continue
+                    else
+                        echo -e " $RED*$BLUE Auto-repair failed$RESETCOLOR\n"
+                    fi
+                fi
+                
+                # Show logs on final failure
+                if [ $start_attempts -eq $max_attempts ]; then
+                    echo -e " $RED*$BLUE All start attempts failed. Checking logs...$RESETCOLOR\n"
+                    journalctl -u tor.service --no-pager -n 10
+                    echo -e "\n$YELLOW Recommendation: Run 'cerberus heal-tor' for manual repair$RESETCOLOR"
+                    exit 1
+                fi
             fi
-        fi
+        done
         
         sleep 5
         
         if ! pgrep -f tor > /dev/null; then
-            echo -e " $RED*$BLUE Tor failed to start properly$RESETCOLOR\n"
-            exit 1
+            echo -e " $RED*$BLUE Tor process not found, attempting recovery...$RESETCOLOR\n"
+            if check_and_heal_tor_service "post-start" "true"; then
+                systemctl start tor
+                sleep 3
+            fi
+            
+            if ! pgrep -f tor > /dev/null; then
+                echo -e " $RED*$BLUE Tor failed to start properly$RESETCOLOR\n"
+                exit 1
+            fi
         fi
     fi
     
@@ -652,6 +904,7 @@ function change {
 function status {
     echo -e "\n$GREEN[$BLUE i$GREEN ]$BLUE Cerberus Status:$RESETCOLOR\n"
     
+    # Enhanced status with self-healing info
     if systemctl is-active --quiet tor; then
         echo -e "$GREEN ✓ Tor service is running$RESETCOLOR"
         
@@ -677,12 +930,24 @@ function status {
         fi
     else
         echo -e "$RED ✗ Tor service is not running$RESETCOLOR"
+        
+        # Quick health check when service is down
+        if systemctl status tor.service 2>&1 | grep -q "masked"; then
+            echo -e "$YELLOW ⚠ Tor service is MASKED - run 'cerberus heal-tor' to fix$RESETCOLOR"
+        fi
     fi
     
     if [ -f /etc/sysctl.d/98-cerberus.conf ]; then
         echo -e "$GREEN ✓ IPv6 is disabled$RESETCOLOR"
     else
         echo -e "$BLUE ℹ IPv6 is enabled$RESETCOLOR"
+    fi
+    
+    # Self-healing status
+    if [ -f "$SELF_HEALING_SCRIPT" ]; then
+        echo -e "$GREEN ✓ Self-healing script is installed$RESETCOLOR"
+    else
+        echo -e "$YELLOW ⚠ Self-healing script not installed$RESETCOLOR"
     fi
     
     echo ""
@@ -764,6 +1029,12 @@ case "$1" in
             echo -e "$RED ✗ $2 is NOT a Tor exit node$RESETCOLOR"
         fi
     ;;
+    heal-tor)
+        heal_tor_service
+    ;;
+    check-tor)
+        check_and_heal_tor_service "manual" "false"
+    ;;
     starti2p)
         starti2p
     ;;
@@ -778,25 +1049,41 @@ case "$1" in
     *)
         echo -e "
 $RED╔═══════════════════════════════════════════════════════════════════════════════╗
-$RED║                    $GREEN Cerberus v2.0.0                                           $RED║
+$RED║                    $GREEN Cerberus v2.1.0 Enhanced                                  $RED║
 $RED║                    $BLUE Engineered by 0xb0rn3 | 0xbv1                            $RED║
 $RED║                    $BLUE https://github.com/0xb0rn3/cerberus                      $RED║
+$RED║                    $YELLOW Now with Self-Healing Tor Service Management            $RED║
 $RED╚═══════════════════════════════════════════════════════════════════════════════╝$RESETCOLOR
 
-Usage: cerberus {start|stop|restart|change|status|myip|info|monitor|update-nodes|verify|starti2p|stopi2p}
+Usage: cerberus {start|stop|restart|change|status|myip|info|monitor|update-nodes|verify|heal-tor|check-tor|starti2p|stopi2p}
 
+$GREEN Core Commands:$RESETCOLOR
 $GREEN start$BLUE         - Start system-wide anonymous tunneling through TOR
 $GREEN stop$BLUE          - Stop anonymous tunneling and restore original settings  
 $GREEN restart$BLUE       - Restart Cerberus (stop + start)
 $GREEN change$BLUE        - Change TOR identity (get new exit node)
 $GREEN status$BLUE        - Check if Cerberus is running
 $GREEN myip$BLUE          - Show current IP address
+
+$GREEN Network Commands:$RESETCOLOR
 $GREEN info$BLUE          - Show detailed Tor network information
 $GREEN monitor$BLUE       - Real-time Tor network monitoring
 $GREEN update-nodes$BLUE  - Update Tor exit node database
 $GREEN verify <IP>$BLUE   - Check if an IP is a Tor exit node
+
+$GREEN Self-Healing Commands:$RESETCOLOR
+$GREEN heal-tor$BLUE      - Manually repair masked/corrupted tor.service
+$GREEN check-tor$BLUE     - Check Tor service health without auto-repair
+
+$GREEN I2P Commands:$RESETCOLOR
 $GREEN starti2p$BLUE      - Start I2P services
 $GREEN stopi2p$BLUE       - Stop I2P services
+
+$YELLOW Enhanced Features in v2.1.0:$RESETCOLOR
+$BLUE • Automatic detection and repair of masked tor.service issues
+$BLUE • Self-healing during service start failures
+$BLUE • Enhanced logging and diagnostics
+$BLUE • Prevention of corrupted unit file problems
 $RESETCOLOR" >&2
         exit 1
     ;;
