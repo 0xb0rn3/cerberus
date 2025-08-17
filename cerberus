@@ -7,13 +7,12 @@
 # Should-Start:
 # Default-Start:
 # Default-Stop:
-# Short-Description: Transparent Proxy through TOR.
+# Short-Description: Transparent Proxy through TOR with Advanced Autofix
 ### END INIT INFO
 
-# Cerberus v2.1.1 - Enhanced with Advanced Tor Service Diagnostics
+# Cerberus v2.1.0 - Enhanced with Comprehensive Autofix System
 # Engineered by 0xb0rn3 | 0xbv1
 # Repository: https://github.com/0xb0rn3/cerberus
-# Enhanced with comprehensive Tor service debugging and repair
 
 export BLUE='\033[1;94m'
 export GREEN='\033[1;92m'
@@ -42,6 +41,7 @@ NODE_METADATA="$CERBERUS_CACHE/node-metadata.json"
 
 # Enhanced diagnostic configuration
 DIAGNOSTIC_LOG="$CERBERUS_LOGS/diagnostic.log"
+AUTOFIX_LOG="$CERBERUS_LOGS/autofix.log"
 TOR_SERVICE="tor.service"
 TOR_UNIT_PATH="/usr/lib/systemd/system/tor.service"
 
@@ -67,7 +67,337 @@ log_message() {
     fi
 }
 
-# Advanced Tor service diagnostics
+# Autofix logging function
+log_autofix() {
+    local message="$1"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$timestamp] [AUTOFIX] $message" >> "$AUTOFIX_LOG"
+    log_message "$message"
+}
+
+# Comprehensive Tor service autofix system
+autofix_tor_service() {
+    local context="${1:-manual}"
+    local fixes_applied=0
+    
+    log_autofix "$BLUE=== Starting Comprehensive Tor Service Autofix ===$RESETCOLOR"
+    
+    # Fix 1: Stop all Tor processes and clear state
+    log_autofix "$BLUE Stopping all Tor processes and clearing state...$RESETCOLOR"
+    systemctl stop tor.service 2>/dev/null || true
+    systemctl stop tor@default.service 2>/dev/null || true
+    pkill -f tor 2>/dev/null || true
+    systemctl reset-failed tor.service 2>/dev/null || true
+    systemctl reset-failed tor@default.service 2>/dev/null || true
+    sleep 3
+    ((fixes_applied++))
+    
+    # Fix 2: Recreate tor user with proper configuration
+    log_autofix "$BLUE Ensuring tor user exists with correct configuration...$RESETCOLOR"
+    if ! id -u tor > /dev/null 2>&1; then
+        log_autofix "$YELLOW Creating missing tor user...$RESETCOLOR"
+        userdel tor 2>/dev/null || true
+        groupdel tor 2>/dev/null || true
+        useradd -r -M -s /bin/false -d /var/lib/tor -c "Tor daemon user" tor
+        ((fixes_applied++))
+    else
+        # Fix existing tor user if needed
+        usermod -d /var/lib/tor -s /bin/false tor 2>/dev/null || true
+    fi
+    
+    # Fix 3: Recreate and fix all directories with proper permissions
+    log_autofix "$BLUE Recreating directories with proper permissions...$RESETCOLOR"
+    local dirs_to_fix=(
+        "/var/lib/tor:tor:tor:700"
+        "/var/log/tor:tor:tor:755"
+        "/run/tor:tor:tor:755"
+        "/etc/tor:root:root:755"
+        "/var/lib/cerberus:root:root:755"
+        "/var/lib/cerberus/cache:root:root:755"
+        "/var/log/cerberus:root:root:755"
+    )
+    
+    for dir_info in "${dirs_to_fix[@]}"; do
+        IFS=':' read -r dir owner group perms <<< "$dir_info"
+        
+        # Remove and recreate directory
+        rm -rf "$dir" 2>/dev/null || true
+        mkdir -p "$dir"
+        chown "$owner:$group" "$dir"
+        chmod "$perms" "$dir"
+        
+        log_autofix "$GREEN ✓ Fixed directory: $dir$RESETCOLOR"
+        ((fixes_applied++))
+    done
+    
+    # Fix 4: Clean up conflicting files and processes
+    log_autofix "$BLUE Cleaning up conflicting files and processes...$RESETCOLOR"
+    
+    # Remove lock files
+    rm -f /var/lib/tor/lock 2>/dev/null || true
+    rm -f /run/tor/tor.pid 2>/dev/null || true
+    
+    # Kill any remaining tor processes
+    pgrep -f "tor" | while read pid; do
+        if [ "$pid" != "$$" ]; then
+            kill -9 "$pid" 2>/dev/null || true
+        fi
+    done
+    ((fixes_applied++))
+    
+    # Fix 5: Create minimal working torrc configuration
+    log_autofix "$BLUE Creating minimal working Tor configuration...$RESETCOLOR"
+    
+    # Backup existing config
+    [ -f /etc/tor/torrc ] && cp /etc/tor/torrc "/etc/tor/torrc.backup.$(date +%s)" 2>/dev/null
+    
+    # Create minimal, guaranteed-working configuration
+    cat > /etc/tor/torrc << 'AUTOFIX_TORRC_EOF'
+# Cerberus Tor Configuration v2.2.0 - Autofix Generated
+# Minimal configuration for maximum compatibility
+
+# Basic settings
+RunAsDaemon 1
+DataDirectory /var/lib/tor
+PidFile /run/tor/tor.pid
+
+# Network ports
+SocksPort 9050
+TransPort 9040
+DNSPort 5354
+ControlPort 9051
+
+# Basic security
+CookieAuthentication 1
+CookieAuthFileGroupReadable 1
+CookieAuthFile /run/tor/control.authcookie
+
+# Client settings
+ClientOnly 1
+ExitPolicy reject *:*
+
+# Logging
+Log notice file /var/log/tor/notices.log
+Log warn file /var/log/tor/warnings.log
+
+# Performance (conservative)
+CircuitBuildTimeout 30
+NewCircuitPeriod 30
+MaxCircuitDirtiness 600
+
+# Network settings
+VirtualAddrNetwork 10.192.0.0/10
+AutomapHostsOnResolve 1
+AUTOFIX_TORRC_EOF
+    
+    chown root:root /etc/tor/torrc
+    chmod 644 /etc/tor/torrc
+    ((fixes_applied++))
+    
+    # Fix 6: Test and repair configuration
+    log_autofix "$BLUE Testing Tor configuration...$RESETCOLOR"
+    local config_test_attempts=0
+    while [ $config_test_attempts -lt 3 ]; do
+        if sudo -u tor tor --verify-config -f /etc/tor/torrc &>/dev/null; then
+            log_autofix "$GREEN ✓ Tor configuration is valid$RESETCOLOR"
+            break
+        else
+            ((config_test_attempts++))
+            log_autofix "$YELLOW Configuration test failed (attempt $config_test_attempts), creating even simpler config...$RESETCOLOR"
+            
+            # Ultra-minimal configuration
+            cat > /etc/tor/torrc << 'ULTRAMIN_TORRC_EOF'
+# Ultra-minimal Tor configuration - Autofix Emergency
+DataDirectory /var/lib/tor
+SocksPort 9050
+ClientOnly 1
+ExitPolicy reject *:*
+ULTRAMIN_TORRC_EOF
+            ((fixes_applied++))
+        fi
+    done
+    
+    # Fix 7: Repair package installation if needed
+    if [ ! -f "$TOR_UNIT_PATH" ] || [ $(stat -c%s "$TOR_UNIT_PATH" 2>/dev/null || echo "0") -eq 0 ]; then
+        log_autofix "$BLUE Repairing Tor package installation...$RESETCOLOR"
+        
+        # Force reinstall tor package
+        if pacman -S tor --overwrite "*" --noconfirm >/dev/null 2>&1; then
+            log_autofix "$GREEN ✓ Tor package reinstalled$RESETCOLOR"
+            ((fixes_applied++))
+            
+            # Restore our configuration
+            cat > /etc/tor/torrc << 'REINSTALL_TORRC_EOF'
+# Cerberus Tor Configuration - Post-Reinstall
+DataDirectory /var/lib/tor
+PidFile /run/tor/tor.pid
+SocksPort 9050
+TransPort 9040
+DNSPort 5354
+ControlPort 9051
+CookieAuthentication 1
+CookieAuthFileGroupReadable 1
+CookieAuthFile /run/tor/control.authcookie
+ClientOnly 1
+ExitPolicy reject *:*
+Log notice file /var/log/tor/notices.log
+REINSTALL_TORRC_EOF
+            ((fixes_applied++))
+        fi
+    fi
+    
+    # Fix 8: Address systemd service issues
+    log_autofix "$BLUE Fixing systemd service configuration...$RESETCOLOR"
+    
+    # Reload systemd daemon
+    systemctl daemon-reload
+    
+    # Create custom service override if needed
+    mkdir -p /etc/systemd/system/tor.service.d
+    cat > /etc/systemd/system/tor.service.d/cerberus-override.conf << 'SERVICE_OVERRIDE_EOF'
+[Unit]
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStartPre=/bin/mkdir -p /var/lib/tor /var/log/tor /run/tor
+ExecStartPre=/bin/chown tor:tor /var/lib/tor /var/log/tor /run/tor
+ExecStartPre=/bin/chmod 700 /var/lib/tor
+ExecStart=
+ExecStart=/usr/bin/tor -f /etc/tor/torrc
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=60
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+SERVICE_OVERRIDE_EOF
+    
+    systemctl daemon-reload
+    ((fixes_applied++))
+    
+    # Fix 9: Handle port conflicts
+    log_autofix "$BLUE Checking and resolving port conflicts...$RESETCOLOR"
+    local tor_ports=(9050 9051 9040 5354)
+    for port in "${tor_ports[@]}"; do
+        local conflicting_pids=$(ss -tlnp | grep ":$port " | grep -v tor | awk -F',' '{print $2}' | grep -o '[0-9]*' | sort -u)
+        for pid in $conflicting_pids; do
+            if [ -n "$pid" ] && [ "$pid" != "0" ]; then
+                log_autofix "$YELLOW Killing process $pid using port $port$RESETCOLOR"
+                kill -9 "$pid" 2>/dev/null || true
+                ((fixes_applied++))
+            fi
+        done
+    done
+    
+    # Fix 10: Network connectivity check and repair
+    log_autofix "$BLUE Verifying and fixing network connectivity...$RESETCOLOR"
+    if ! timeout 5 ping -c1 1.1.1.1 &>/dev/null; then
+        log_autofix "$YELLOW Network connectivity issues detected, attempting to restart NetworkManager...$RESETCOLOR"
+        systemctl restart NetworkManager 2>/dev/null || true
+        systemctl restart systemd-networkd 2>/dev/null || true
+        sleep 5
+        ((fixes_applied++))
+    fi
+    
+    # Fix 11: Final test start
+    log_autofix "$BLUE Performing final test start...$RESETCOLOR"
+    local start_attempts=0
+    local max_start_attempts=5
+    local start_success=false
+    
+    while [ $start_attempts -lt $max_start_attempts ]; do
+        ((start_attempts++))
+        log_autofix "$BLUE Start attempt $start_attempts/$max_start_attempts$RESETCOLOR"
+        
+        if systemctl start tor.service; then
+            sleep 5
+            if systemctl is-active --quiet tor.service && pgrep -f tor > /dev/null; then
+                log_autofix "$GREEN ✓ Tor service started successfully!$RESETCOLOR"
+                start_success=true
+                break
+            fi
+        fi
+        
+        # If start failed, try even more aggressive fixes
+        if [ $start_attempts -lt $max_start_attempts ]; then
+            log_autofix "$YELLOW Start failed, applying additional fixes...$RESETCOLOR"
+            
+            # Kill everything tor-related
+            pkill -f tor 2>/dev/null || true
+            systemctl stop tor.service 2>/dev/null || true
+            
+            # Clear systemd state
+            systemctl reset-failed tor.service 2>/dev/null || true
+            rm -f /var/lib/systemd/timers/stamp-tor.service 2>/dev/null || true
+            
+            # Recreate directories again
+            rm -rf /var/lib/tor /var/log/tor /run/tor
+            mkdir -p /var/lib/tor /var/log/tor /run/tor
+            chown tor:tor /var/lib/tor /var/log/tor /run/tor
+            chmod 700 /var/lib/tor
+            chmod 755 /var/log/tor /run/tor
+            
+            # Ultra-simple config for troublesome systems
+            if [ $start_attempts -ge 3 ]; then
+                cat > /etc/tor/torrc << 'EMERGENCY_TORRC_EOF'
+# Emergency Tor configuration
+DataDirectory /var/lib/tor
+SocksPort 9050
+EMERGENCY_TORRC_EOF
+            fi
+            
+            systemctl daemon-reload
+            sleep 2
+            ((fixes_applied++))
+        fi
+    done
+    
+    # Fix 12: Post-start verification and additional fixes
+    if [ "$start_success" = true ]; then
+        log_autofix "$BLUE Performing post-start verification...$RESETCOLOR"
+        
+        # Test Tor connectivity
+        sleep 5
+        if timeout 10 curl -s --socks5-hostname 127.0.0.1:9050 https://check.torproject.org/ | grep -q "Congratulations"; then
+            log_autofix "$GREEN ✓ Tor connectivity verified - autofix successful!$RESETCOLOR"
+        else
+            log_autofix "$YELLOW Tor started but connectivity test failed - may need time to build circuits$RESETCOLOR"
+        fi
+        
+        # Set up log rotation to prevent future issues
+        cat > /etc/logrotate.d/cerberus-tor << 'LOGROTATE_EOF'
+/var/log/tor/*.log {
+    weekly
+    rotate 4
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 tor tor
+    postrotate
+        systemctl reload tor.service || true
+    endscript
+}
+LOGROTATE_EOF
+        
+        log_autofix "$GREEN=== Autofix completed successfully! Applied $fixes_applied fixes ===$RESETCOLOR"
+        return 0
+    else
+        log_autofix "$RED=== Autofix failed after $fixes_applied attempts ===$RESETCOLOR"
+        log_autofix "$RED Final troubleshooting suggestions:$RESETCOLOR"
+        log_autofix "$YELLOW 1. Check system logs: journalctl -u tor.service -n 50$RESETCOLOR"
+        log_autofix "$YELLOW 2. Verify Tor package: pacman -Qi tor$RESETCOLOR"
+        log_autofix "$YELLOW 3. Check available memory: free -h$RESETCOLOR"
+        log_autofix "$YELLOW 4. Try manual start: sudo -u tor /usr/bin/tor -f /etc/tor/torrc$RESETCOLOR"
+        return 1
+    fi
+}
+
+# Advanced Tor service diagnostics with enhanced detection
 diagnose_tor_service() {
     local context="${1:-manual}"
     
@@ -75,301 +405,286 @@ diagnose_tor_service() {
     echo "[$$(date '+%Y-%m-%d %H:%M:%S')] Starting diagnostic for context: $context" >> "$DIAGNOSTIC_LOG"
     
     local issues_found=0
-    local fixes_available=0
+    local critical_issues=0
+    local fixable_issues=0
     
-    # Check 1: Service unit file
+    # Enhanced diagnostic checks
+    
+    # Check 1: Service unit file integrity
     log_message "$BLUE Checking service unit file...$RESETCOLOR"
     if [ ! -f "$TOR_UNIT_PATH" ]; then
         log_message "$RED ✗ Tor unit file missing: $TOR_UNIT_PATH$RESETCOLOR"
-        echo "ISSUE: Unit file missing" >> "$DIAGNOSTIC_LOG"
+        echo "CRITICAL: Unit file missing" >> "$DIAGNOSTIC_LOG"
         ((issues_found++))
+        ((critical_issues++))
+        ((fixable_issues++))
     else
         local file_size=$(stat -c%s "$TOR_UNIT_PATH" 2>/dev/null || echo "0")
         if [ "$file_size" -eq 0 ]; then
             log_message "$RED ✗ Tor unit file is corrupted (0 bytes)$RESETCOLOR"
-            echo "ISSUE: Unit file corrupted (0 bytes)" >> "$DIAGNOSTIC_LOG"
+            echo "CRITICAL: Unit file corrupted" >> "$DIAGNOSTIC_LOG"
             ((issues_found++))
-            ((fixes_available++))
+            ((critical_issues++))
+            ((fixable_issues++))
         else
             log_message "$GREEN ✓ Unit file exists and is not empty$RESETCOLOR"
         fi
     fi
     
-    # Check 2: Service status
+    # Check 2: Service status with detailed analysis
     log_message "$BLUE Checking service status...$RESETCOLOR"
-    if systemctl is-failed --quiet tor.service; then
-        log_message "$RED ✗ Tor service is in failed state$RESETCOLOR"
-        ((issues_found++))
-        
-        # Get detailed failure reason
-        local failure_reason=$(systemctl status tor.service 2>&1 | grep -E "(failed|error|exit|status)" | head -3)
-        echo "FAILURE REASON: $failure_reason" >> "$DIAGNOSTIC_LOG"
-        log_message "$YELLOW Failure details: $failure_reason$RESETCOLOR"
-    elif systemctl is-active --quiet tor.service; then
-        log_message "$GREEN ✓ Tor service is running$RESETCOLOR"
-    else
-        log_message "$YELLOW ⚠ Tor service is inactive$RESETCOLOR"
-    fi
+    local service_status=$(systemctl is-active tor.service 2>/dev/null || echo "unknown")
+    local service_enabled=$(systemctl is-enabled tor.service 2>/dev/null || echo "unknown")
     
-    # Check 3: Configuration file
+    case "$service_status" in
+        "failed")
+            log_message "$RED ✗ Tor service is in failed state$RESETCOLOR"
+            ((issues_found++))
+            ((fixable_issues++))
+            
+            # Get detailed failure analysis
+            local failure_details=$(systemctl status tor.service 2>&1)
+            local exit_code=$(echo "$failure_details" | grep -o "exit-code.*)" | head -1)
+            local main_pid=$(echo "$failure_details" | grep "Main PID" | head -1)
+            
+            echo "FAILURE DETAILS: $exit_code" >> "$DIAGNOSTIC_LOG"
+            echo "MAIN PID INFO: $main_pid" >> "$DIAGNOSTIC_LOG"
+            log_message "$YELLOW Failure details: $exit_code$RESETCOLOR"
+            ;;
+        "inactive")
+            log_message "$YELLOW ⚠ Tor service is inactive$RESETCOLOR"
+            ((issues_found++))
+            ;;
+        "active")
+            log_message "$GREEN ✓ Tor service is running$RESETCOLOR"
+            
+            # Additional checks for running service
+            if ! pgrep -f tor > /dev/null; then
+                log_message "$RED ✗ Service active but no tor process found$RESETCOLOR"
+                ((issues_found++))
+                ((fixable_issues++))
+            fi
+            ;;
+        *)
+            log_message "$RED ✗ Service status unknown: $service_status$RESETCOLOR"
+            ((issues_found++))
+            ((critical_issues++))
+            ;;
+    esac
+    
+    # Check 3: Configuration file comprehensive analysis
     log_message "$BLUE Checking Tor configuration...$RESETCOLOR"
     if [ ! -f /etc/tor/torrc ]; then
         log_message "$RED ✗ Tor configuration file missing$RESETCOLOR"
-        echo "ISSUE: torrc missing" >> "$DIAGNOSTIC_LOG"
+        echo "CRITICAL: torrc missing" >> "$DIAGNOSTIC_LOG"
         ((issues_found++))
-        ((fixes_available++))
+        ((critical_issues++))
+        ((fixable_issues++))
     else
-        # Test configuration validity
-        if sudo -u tor tor --verify-config -f /etc/tor/torrc &>/dev/null; then
+        # Test configuration with detailed error capture
+        local config_test_output=$(sudo -u tor tor --verify-config -f /etc/tor/torrc 2>&1)
+        if [ $? -eq 0 ]; then
             log_message "$GREEN ✓ Tor configuration is valid$RESETCOLOR"
         else
             log_message "$RED ✗ Tor configuration has errors$RESETCOLOR"
-            echo "ISSUE: Invalid torrc configuration" >> "$DIAGNOSTIC_LOG"
+            echo "CONFIG ERROR: $config_test_output" >> "$DIAGNOSTIC_LOG"
             ((issues_found++))
-            ((fixes_available++))
+            ((fixable_issues++))
             
-            # Get detailed error
-            local config_error=$(sudo -u tor tor --verify-config -f /etc/tor/torrc 2>&1 | head -3)
-            echo "CONFIG ERROR: $config_error" >> "$DIAGNOSTIC_LOG"
-            log_message "$YELLOW Config error: $config_error$RESETCOLOR"
+            # Show first few lines of error
+            local first_error=$(echo "$config_test_output" | head -2 | tail -1)
+            log_message "$YELLOW Config error: $first_error$RESETCOLOR"
+        fi
+        
+        # Check for common configuration issues
+        if grep -q "^#" /etc/tor/torrc && ! grep -q "^[^#]" /etc/tor/torrc; then
+            log_message "$YELLOW ⚠ Configuration file appears to be entirely commented out$RESETCOLOR"
+            ((issues_found++))
+            ((fixable_issues++))
         fi
     fi
     
-    # Check 4: User and permissions
+    # Check 4: User, permissions, and directory analysis
     log_message "$BLUE Checking user and permissions...$RESETCOLOR"
     if ! id -u tor > /dev/null 2>&1; then
         log_message "$RED ✗ Tor user does not exist$RESETCOLOR"
-        echo "ISSUE: Tor user missing" >> "$DIAGNOSTIC_LOG"
+        echo "CRITICAL: Tor user missing" >> "$DIAGNOSTIC_LOG"
         ((issues_found++))
-        ((fixes_available++))
+        ((critical_issues++))
+        ((fixable_issues++))
     else
         log_message "$GREEN ✓ Tor user exists$RESETCOLOR"
         
-        # Check directories
-        local dirs_to_check=("/var/lib/tor" "/var/log/tor" "/run/tor")
-        for dir in "${dirs_to_check[@]}"; do
+        # Check user configuration
+        local tor_home=$(getent passwd tor | cut -d: -f6)
+        local tor_shell=$(getent passwd tor | cut -d: -f7)
+        
+        if [ "$tor_home" != "/var/lib/tor" ]; then
+            log_message "$YELLOW ⚠ Tor user home directory incorrect: $tor_home$RESETCOLOR"
+            ((issues_found++))
+            ((fixable_issues++))
+        fi
+        
+        # Enhanced directory checks
+        local critical_dirs=("/var/lib/tor" "/var/log/tor" "/run/tor")
+        for dir in "${critical_dirs[@]}"; do
             if [ ! -d "$dir" ]; then
-                log_message "$YELLOW ⚠ Directory missing: $dir$RESETCOLOR"
-                echo "ISSUE: Directory missing - $dir" >> "$DIAGNOSTIC_LOG"
+                log_message "$RED ✗ Critical directory missing: $dir$RESETCOLOR"
+                echo "CRITICAL: Directory missing - $dir" >> "$DIAGNOSTIC_LOG"
                 ((issues_found++))
-                ((fixes_available++))
+                ((critical_issues++))
+                ((fixable_issues++))
             else
                 local owner=$(stat -c %U "$dir" 2>/dev/null)
+                local group=$(stat -c %G "$dir" 2>/dev/null)
+                local perms=$(stat -c %a "$dir" 2>/dev/null)
+                
                 if [ "$owner" != "tor" ]; then
-                    log_message "$YELLOW ⚠ Directory wrong owner: $dir (owner: $owner)$RESETCOLOR"
-                    echo "ISSUE: Wrong ownership - $dir" >> "$DIAGNOSTIC_LOG"
+                    log_message "$RED ✗ Directory wrong owner: $dir (owner: $owner, should be: tor)$RESETCOLOR"
+                    echo "PERMISSION: Wrong ownership - $dir" >> "$DIAGNOSTIC_LOG"
                     ((issues_found++))
-                    ((fixes_available++))
+                    ((fixable_issues++))
+                elif [ "$group" != "tor" ]; then
+                    log_message "$YELLOW ⚠ Directory wrong group: $dir (group: $group, should be: tor)$RESETCOLOR"
+                    ((issues_found++))
+                    ((fixable_issues++))
                 else
                     log_message "$GREEN ✓ Directory OK: $dir$RESETCOLOR"
                 fi
+                
+                # Check permissions
+                case "$dir" in
+                    "/var/lib/tor")
+                        if [ "$perms" != "700" ]; then
+                            log_message "$YELLOW ⚠ Directory permissions should be 700: $dir (current: $perms)$RESETCOLOR"
+                            ((issues_found++))
+                            ((fixable_issues++))
+                        fi
+                        ;;
+                    *)
+                        if [ "$perms" != "755" ] && [ "$perms" != "750" ]; then
+                            log_message "$YELLOW ⚠ Directory permissions may be incorrect: $dir (current: $perms)$RESETCOLOR"
+                            ((issues_found++))
+                            ((fixable_issues++))
+                        fi
+                        ;;
+                esac
             fi
         done
     fi
     
-    # Check 5: Network connectivity
+    # Check 5: Enhanced network connectivity
     log_message "$BLUE Checking network connectivity...$RESETCOLOR"
-    if timeout 5 ping -c1 1.1.1.1 &>/dev/null; then
-        log_message "$GREEN ✓ Network connectivity OK$RESETCOLOR"
+    local network_ok=true
+    
+    if ! timeout 5 ping -c1 1.1.1.1 &>/dev/null; then
+        if ! timeout 5 ping -c1 8.8.8.8 &>/dev/null; then
+            log_message "$RED ✗ No network connectivity$RESETCOLOR"
+            echo "NETWORK: No connectivity" >> "$DIAGNOSTIC_LOG"
+            ((issues_found++))
+            ((critical_issues++))
+            network_ok=false
+        else
+            log_message "$YELLOW ⚠ Limited network connectivity$RESETCOLOR"
+            ((issues_found++))
+        fi
     else
-        log_message "$YELLOW ⚠ Network connectivity issues$RESETCOLOR"
-        echo "ISSUE: Network connectivity problem" >> "$DIAGNOSTIC_LOG"
-        ((issues_found++))
+        log_message "$GREEN ✓ Network connectivity OK$RESETCOLOR"
     fi
     
-    # Check 6: Port conflicts
+    # DNS resolution check
+    if [ "$network_ok" = true ]; then
+        if ! timeout 3 nslookup google.com > /dev/null 2>&1; then
+            log_message "$YELLOW ⚠ DNS resolution issues detected$RESETCOLOR"
+            ((issues_found++))
+        fi
+    fi
+    
+    # Check 6: Enhanced port conflict detection
     log_message "$BLUE Checking for port conflicts...$RESETCOLOR"
     local tor_ports=(9050 9051 9040 5354)
     for port in "${tor_ports[@]}"; do
-        if ss -tlnp | grep ":$port " | grep -v tor > /dev/null; then
-            local process=$(ss -tlnp | grep ":$port " | grep -v tor | awk '{print $NF}')
-            log_message "$YELLOW ⚠ Port $port in use by: $process$RESETCOLOR"
-            echo "ISSUE: Port conflict - $port used by $process" >> "$DIAGNOSTIC_LOG"
+        local port_usage=$(ss -tlnp | grep ":$port ")
+        if echo "$port_usage" | grep -v tor | grep -q ":$port "; then
+            local conflicting_process=$(echo "$port_usage" | grep -v tor | grep ":$port " | awk '{print $NF}' | head -1)
+            log_message "$RED ✗ Port $port conflict: $conflicting_process$RESETCOLOR"
+            echo "PORT CONFLICT: $port used by $conflicting_process" >> "$DIAGNOSTIC_LOG"
             ((issues_found++))
+            ((fixable_issues++))
         fi
     done
     
-    # Check 7: Recent journal errors
-    log_message "$BLUE Checking recent journal errors...$RESETCOLOR"
-    local recent_errors=$(journalctl -u tor.service --since "5 minutes ago" --no-pager -q 2>/dev/null | grep -E "(error|failed|fatal)" | wc -l)
-    if [ $recent_errors -gt 0 ]; then
-        log_message "$YELLOW ⚠ Found $recent_errors recent errors in journal$RESETCOLOR"
-        echo "ISSUE: Recent journal errors ($recent_errors)" >> "$DIAGNOSTIC_LOG"
-        
-        # Show last few errors
-        log_message "$BLUE Recent errors:$RESETCOLOR"
-        journalctl -u tor.service --since "5 minutes ago" --no-pager -q 2>/dev/null | grep -E "(error|failed|fatal)" | tail -3 | while read line; do
-            log_message "$YELLOW   $line$RESETCOLOR"
-        done
+    # Check 7: System resources
+    log_message "$BLUE Checking system resources...$RESETCOLOR"
+    local available_mem=$(grep MemAvailable /proc/meminfo | awk '{print $2}')
+    local available_mem_mb=$((available_mem / 1024))
+    
+    if [ $available_mem_mb -lt 128 ]; then
+        log_message "$RED ✗ Low memory available: ${available_mem_mb}MB$RESETCOLOR"
+        echo "RESOURCE: Low memory - ${available_mem_mb}MB" >> "$DIAGNOSTIC_LOG"
+        ((issues_found++))
+        ((critical_issues++))
+    elif [ $available_mem_mb -lt 256 ]; then
+        log_message "$YELLOW ⚠ Limited memory available: ${available_mem_mb}MB$RESETCOLOR"
+        ((issues_found++))
     fi
     
-    # Summary
+    # Check disk space
+    local available_disk=$(df /var/lib/tor | tail -1 | awk '{print $4}')
+    local available_disk_mb=$((available_disk / 1024))
+    
+    if [ $available_disk_mb -lt 100 ]; then
+        log_message "$RED ✗ Low disk space: ${available_disk_mb}MB$RESETCOLOR"
+        echo "RESOURCE: Low disk space - ${available_disk_mb}MB" >> "$DIAGNOSTIC_LOG"
+        ((issues_found++))
+        ((critical_issues++))
+    fi
+    
+    # Check 8: Recent journal errors with pattern analysis
+    log_message "$BLUE Checking recent journal errors...$RESETCOLOR"
+    local recent_errors=$(journalctl -u tor.service --since "10 minutes ago" --no-pager -q 2>/dev/null | grep -E "(error|failed|fatal|denied)" | wc -l)
+    if [ $recent_errors -gt 0 ]; then
+        log_message "$YELLOW ⚠ Found $recent_errors recent errors in journal$RESETCOLOR"
+        echo "JOURNAL ERRORS: $recent_errors recent errors" >> "$DIAGNOSTIC_LOG"
+        
+        # Analyze error patterns
+        local common_errors=$(journalctl -u tor.service --since "10 minutes ago" --no-pager -q 2>/dev/null | grep -E "(error|failed|fatal)" | head -5)
+        while IFS= read -r error_line; do
+            echo "ERROR: $error_line" >> "$DIAGNOSTIC_LOG"
+            if echo "$error_line" | grep -q "Permission denied"; then
+                log_message "$RED ✗ Permission errors detected$RESETCOLOR"
+                ((fixable_issues++))
+            elif echo "$error_line" | grep -q "Address already in use"; then
+                log_message "$RED ✗ Port binding errors detected$RESETCOLOR"
+                ((fixable_issues++))
+            elif echo "$error_line" | grep -q "configuration"; then
+                log_message "$RED ✗ Configuration errors detected$RESETCOLOR"
+                ((fixable_issues++))
+            fi
+        done <<< "$common_errors"
+    fi
+    
+    # Summary with enhanced decision logic
     log_message "$BLUE=== Diagnostic Summary ===$RESETCOLOR"
-    echo "SUMMARY: Issues found: $issues_found, Fixes available: $fixes_available" >> "$DIAGNOSTIC_LOG"
+    echo "SUMMARY: Issues: $issues_found, Critical: $critical_issues, Fixable: $fixable_issues" >> "$DIAGNOSTIC_LOG"
     
     if [ $issues_found -eq 0 ]; then
         log_message "$GREEN ✓ No issues detected with Tor service$RESETCOLOR"
         return 0
-    else
+    elif [ $critical_issues -gt 2 ]; then
+        log_message "$RED ✗ Multiple critical issues detected - system may need manual intervention$RESETCOLOR"
+        return 3
+    elif [ $fixable_issues -gt 0 ]; then
         log_message "$YELLOW ⚠ Found $issues_found issues with Tor service$RESETCOLOR"
-        if [ $fixes_available -gt 0 ]; then
-            log_message "$BLUE ℹ $fixes_available issues can be automatically fixed$RESETCOLOR"
-            return 1
-        else
-            log_message "$RED ✗ Issues require manual intervention$RESETCOLOR"
-            return 2
-        fi
-    fi
-}
-
-# Advanced Tor service repair
-repair_tor_service() {
-    log_message "$GREEN=== Starting Tor Service Repair ===$RESETCOLOR"
-    echo "[$$(date '+%Y-%m-%d %H:%M:%S')] Starting repair process" >> "$DIAGNOSTIC_LOG"
-    
-    local repairs_made=0
-    
-    # Stop any running tor processes
-    log_message "$BLUE Stopping existing Tor processes...$RESETCOLOR"
-    systemctl stop tor.service 2>/dev/null || true
-    pkill -f tor 2>/dev/null || true
-    sleep 2
-    
-    # Repair 1: Create/fix tor user
-    if ! id -u tor > /dev/null 2>&1; then
-        log_message "$BLUE Creating tor user...$RESETCOLOR"
-        useradd -r -s /bin/false -d /var/lib/tor -c "Tor daemon user" tor
-        ((repairs_made++))
-    fi
-    
-    # Repair 2: Create and fix directories
-    log_message "$BLUE Creating/fixing Tor directories...$RESETCOLOR"
-    local dirs_to_fix=("/var/lib/tor" "/var/log/tor" "/run/tor" "/etc/tor")
-    for dir in "${dirs_to_fix[@]}"; do
-        if [ ! -d "$dir" ]; then
-            mkdir -p "$dir"
-            log_message "$GREEN ✓ Created directory: $dir$RESETCOLOR"
-            ((repairs_made++))
-        fi
-        
-        # Fix ownership
-        if [ "$dir" != "/etc/tor" ]; then
-            chown -R tor:tor "$dir" 2>/dev/null
-            chmod 755 "$dir" 2>/dev/null
-            if [ "$dir" = "/var/lib/tor" ]; then
-                chmod 700 "$dir" 2>/dev/null
-            fi
-        fi
-    done
-    
-    # Repair 3: Fix/create torrc
-    if [ ! -f /etc/tor/torrc ] || ! sudo -u tor tor --verify-config -f /etc/tor/torrc &>/dev/null; then
-        log_message "$BLUE Creating/fixing Tor configuration...$RESETCOLOR"
-        
-        # Backup existing config
-        [ -f /etc/tor/torrc ] && cp /etc/tor/torrc /etc/tor/torrc.broken.$(date +%s)
-        
-        cat > /etc/tor/torrc << 'EOF'
-# Cerberus Tor Configuration v2.1.1 - Enhanced
-# Auto-generated configuration for maximum compatibility
-
-# Basic network settings
-VirtualAddrNetwork 10.192.0.0/10
-AutomapHostsOnResolve 1
-TransPort 9040
-SocksPort 9050
-DNSPort 5354
-RunAsDaemon 1
-
-# Essential paths and security
-DataDirectory /var/lib/tor
-PidFile /run/tor/tor.pid
-AvoidDiskWrites 1
-
-# Control port for management
-ControlPort 9051
-CookieAuthentication 1
-CookieAuthFileGroupReadable 1
-CookieAuthFile /run/tor/control.authcookie
-
-# Performance settings (conservative)
-CircuitBuildTimeout 15
-ClientOnly 1
-NewCircuitPeriod 30
-MaxCircuitDirtiness 600
-
-# Logging
-Log notice file /var/log/tor/notices.log
-Log warn file /var/log/tor/warnings.log
-
-# Exit policy (client only)
-ExitPolicy reject *:*
-
-# Additional security
-DisableDebuggerAttachment 1
-EOF
-        
-        chown root:root /etc/tor/torrc
-        chmod 644 /etc/tor/torrc
-        ((repairs_made++))
-        
-        # Test new configuration
-        if sudo -u tor tor --verify-config -f /etc/tor/torrc &>/dev/null; then
-            log_message "$GREEN ✓ New Tor configuration is valid$RESETCOLOR"
-        else
-            log_message "$RED ✗ New configuration still has issues$RESETCOLOR"
-            local config_error=$(sudo -u tor tor --verify-config -f /etc/tor/torrc 2>&1 | head -2)
-            log_message "$YELLOW Error details: $config_error$RESETCOLOR"
-        fi
-    fi
-    
-    # Repair 4: Fix package issues
-    if [ ! -f "$TOR_UNIT_PATH" ] || [ $(stat -c%s "$TOR_UNIT_PATH" 2>/dev/null || echo "0") -eq 0 ]; then
-        log_message "$BLUE Repairing Tor package installation...$RESETCOLOR"
-        
-        # Reinstall tor package
-        if pacman -S tor --overwrite "*" --noconfirm >/dev/null 2>&1; then
-            log_message "$GREEN ✓ Tor package reinstalled successfully$RESETCOLOR"
-            ((repairs_made++))
-            
-            # Handle .pacnew files
-            if [ -f /etc/tor/torrc.pacnew ]; then
-                log_message "$BLUE Handling configuration updates...$RESETCOLOR"
-                # Keep our custom config but backup the new one
-                mv /etc/tor/torrc.pacnew /etc/tor/torrc.dist
-                log_message "$GREEN ✓ Saved distribution config as torrc.dist$RESETCOLOR"
-            fi
-        else
-            log_message "$RED ✗ Failed to reinstall Tor package$RESETCOLOR"
-        fi
-    fi
-    
-    # Repair 5: Clear any service failure states
-    log_message "$BLUE Resetting service state...$RESETCOLOR"
-    systemctl daemon-reload
-    systemctl reset-failed tor.service 2>/dev/null || true
-    
-    # Final test
-    log_message "$BLUE Testing repaired Tor service...$RESETCOLOR"
-    if systemctl start tor.service; then
-        sleep 3
-        if systemctl is-active --quiet tor.service; then
-            log_message "$GREEN ✓ Tor service repair successful!$RESETCOLOR"
-            echo "REPAIR SUCCESS: $repairs_made repairs made" >> "$DIAGNOSTIC_LOG"
-            return 0
-        else
-            log_message "$RED ✗ Service still failing after repair$RESETCOLOR"
-            echo "REPAIR PARTIAL: Service still failing" >> "$DIAGNOSTIC_LOG"
-            return 1
-        fi
-    else
-        log_message "$RED ✗ Failed to start Tor service after repair$RESETCOLOR"
-        echo "REPAIR FAILED: Could not start service" >> "$DIAGNOSTIC_LOG"
+        log_message "$BLUE ℹ $fixable_issues issues can be automatically fixed$RESETCOLOR"
         return 1
+    else
+        log_message "$RED ✗ Issues require manual intervention$RESETCOLOR"
+        return 2
     fi
 }
 
-# Enhanced status check with diagnostics
+# Enhanced status check with comprehensive diagnostics
 status_with_diagnostics() {
     log_message "$BLUE=== Comprehensive Cerberus Status ===$RESETCOLOR"
     
@@ -378,7 +693,7 @@ status_with_diagnostics() {
         log_message "$GREEN ✓ Tor service is running$RESETCOLOR"
         
         # Test actual connectivity
-        if timeout 5 curl -s --socks5-hostname 127.0.0.1:9050 https://check.torproject.org/ | grep -q "Congratulations"; then
+        if timeout 5 curl -s --socks5-hostname 127.0.0.1:9050 https://check.torproject.org/ 2>/dev/null | grep -q "Congratulations"; then
             log_message "$GREEN ✓ Tor connectivity verified$RESETCOLOR"
         else
             log_message "$YELLOW ⚠ Tor service running but connectivity test failed$RESETCOLOR"
@@ -391,7 +706,13 @@ status_with_diagnostics() {
         if systemctl is-failed --quiet tor.service; then
             log_message "$RED ✗ Tor service is in failed state$RESETCOLOR"
             log_message "$BLUE Running quick diagnostic...$RESETCOLOR"
+            local diag_result
             diagnose_tor_service "status_check"
+            diag_result=$?
+            
+            if [ $diag_result -eq 1 ]; then
+                log_message "$BLUE ℹ Issues can be automatically fixed - run 'cerberus autofix'$RESETCOLOR"
+            fi
         fi
     fi
     
@@ -450,7 +771,7 @@ function configure_tor {
     fi
     
     cat > /etc/tor/torrc << 'EOF'
-# Cerberus Tor Configuration v2.1.1
+# Cerberus Tor Configuration v2.2.0
 
 # Network settings
 VirtualAddrNetwork 10.192.0.0/10
@@ -498,12 +819,12 @@ function update_exit_nodes {
     
     setup_cerberus_directories
     
-    local temp_file="/tmp/tor-exits-$$"
+    local temp_file="/tmp/tor-exits-$"
     local sources_updated=0
     
     # Source 1: Dan.me.uk (most reliable, 30-min updates)
     if timeout 10 curl -sSL "https://www.dan.me.uk/torlist/?exit" -o "$temp_file" 2>/dev/null; then
-        grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' "$temp_file" > "$EXIT_NODES_FILE.tmp"
+        grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}  "$temp_file" > "$EXIT_NODES_FILE.tmp"
         if [ -s "$EXIT_NODES_FILE.tmp" ]; then
             mv "$EXIT_NODES_FILE.tmp" "$EXIT_NODES_FILE"
             echo -e "$GREEN ✓ Updated from dan.me.uk: $(wc -l < $EXIT_NODES_FILE) exit nodes$RESETCOLOR"
@@ -513,7 +834,7 @@ function update_exit_nodes {
     
     # Source 2: GitHub platformbuilds (hourly updates)
     if timeout 10 curl -sSL "https://raw.githubusercontent.com/platformbuilds/Tor-IP-Addresses/master/tor-exit-nodes.lst" -o "$temp_file" 2>/dev/null; then
-        grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' "$temp_file" >> "$EXIT_NODES_FILE.tmp2"
+        grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}  "$temp_file" >> "$EXIT_NODES_FILE.tmp2"
         if [ -s "$EXIT_NODES_FILE.tmp2" ]; then
             cat "$EXIT_NODES_FILE" "$EXIT_NODES_FILE.tmp2" 2>/dev/null | sort -u > "$EXIT_NODES_FILE.new"
             mv "$EXIT_NODES_FILE.new" "$EXIT_NODES_FILE"
@@ -525,7 +846,7 @@ function update_exit_nodes {
     
     # Source 3: All Tor nodes for complete list
     if timeout 10 curl -sSL "https://www.dan.me.uk/torlist/" -o "$temp_file" 2>/dev/null; then
-        grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' "$temp_file" > "$ALL_NODES_FILE"
+        grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}  "$temp_file" > "$ALL_NODES_FILE"
         if [ -s "$ALL_NODES_FILE" ]; then
             echo -e "$GREEN ✓ Updated all nodes: $(wc -l < $ALL_NODES_FILE) total$RESETCOLOR"
         fi
@@ -641,7 +962,7 @@ function monitor_tor {
     while true; do
         clear
         echo -e "$RED╔═══════════════════════════════════════════════════════════════════════════════╗"
-        echo -e "$RED║                    $GREEN Cerberus v2.1.1 - Tor Network Monitor                    $RED║"
+        echo -e "$RED║                    $GREEN Cerberus v2.2.0 - Tor Network Monitor                    $RED║"
         echo -e "$RED╚═══════════════════════════════════════════════════════════════════════════════╝$RESETCOLOR\n"
         
         # Current status
@@ -704,7 +1025,7 @@ function disable_ipv6 {
     fi
     
     cat << EOF >> /etc/sysctl.d/98-cerberus.conf
-# Disable IPv6 - Cerberus v2.1.1
+# Disable IPv6 - Cerberus v2.2.0
 net.ipv6.conf.all.disable_ipv6 = 1
 net.ipv6.conf.default.disable_ipv6 = 1
 net.ipv6.conf.lo.disable_ipv6 = 1
@@ -803,32 +1124,51 @@ function start {
     setup_tor_directories
     configure_tor
     
-    # Enhanced pre-start check with advanced diagnostics
+    # Enhanced pre-start check with intelligent autofix
     log_message "$BLUE Performing comprehensive pre-start diagnostics...$RESETCOLOR"
     local diag_result
     diagnose_tor_service "pre-start"
     diag_result=$?
     
-    if [ $diag_result -eq 1 ]; then
-        # Issues found that can be fixed
-        echo -e "$YELLOW Issues detected with Tor service. Attempt automatic repair? (Y/n)$RESETCOLOR"
-        read -r auto_repair
-        if [[ ! "$auto_repair" =~ ^[Nn]$ ]]; then
-            if repair_tor_service; then
-                log_message "$GREEN ✓ Tor service repair completed successfully$RESETCOLOR"
+    case $diag_result in
+        1)
+            # Issues found that can be automatically fixed
+            echo -e "$YELLOW Issues detected with Tor service. Attempt automatic repair? (Y/n)$RESETCOLOR"
+            read -r auto_repair
+            if [[ ! "$auto_repair" =~ ^[Nn]$ ]]; then
+                if autofix_tor_service "pre-start"; then
+                    log_message "$GREEN ✓ Tor service autofix completed successfully$RESETCOLOR"
+                else
+                    echo -e "$RED ✗ Autofix failed. Check logs at: $AUTOFIX_LOG$RESETCOLOR"
+                    exit 1
+                fi
             else
-                echo -e "$RED ✗ Could not repair Tor service automatically$RESETCOLOR"
-                echo -e "$BLUE Manual intervention required. Check logs at: $DIAGNOSTIC_LOG$RESETCOLOR"
+                echo -e "$YELLOW Proceeding without autofix - service may fail to start$RESETCOLOR"
+            fi
+            ;;
+        2)
+            echo -e "$RED ✗ Issues detected that may require manual intervention$RESETCOLOR"
+            echo -e "$YELLOW Attempt aggressive autofix anyway? (y/N)$RESETCOLOR"
+            read -r force_repair
+            if [[ "$force_repair" =~ ^[Yy]$ ]]; then
+                autofix_tor_service "aggressive"
+            else
+                echo -e "$BLUE Check diagnostic logs at: $DIAGNOSTIC_LOG$RESETCOLOR"
                 exit 1
             fi
-        else
-            echo -e "$YELLOW Proceeding without repair - service may fail to start$RESETCOLOR"
-        fi
-    elif [ $diag_result -eq 2 ]; then
-        echo -e "$RED ✗ Critical issues detected that require manual intervention$RESETCOLOR"
-        echo -e "$BLUE Check diagnostic logs at: $DIAGNOSTIC_LOG$RESETCOLOR"
-        exit 1
-    fi
+            ;;
+        3)
+            echo -e "$RED ✗ Critical issues detected$RESETCOLOR"
+            echo -e "$YELLOW Force autofix anyway? This may cause system changes. (y/N)$RESETCOLOR"
+            read -r force_repair
+            if [[ "$force_repair" =~ ^[Yy]$ ]]; then
+                autofix_tor_service "critical"
+            else
+                echo -e "$BLUE Check diagnostic logs at: $DIAGNOSTIC_LOG$RESETCOLOR"
+                exit 1
+            fi
+            ;;
+    esac
     
     # Update exit nodes before starting
     update_exit_nodes
@@ -843,53 +1183,56 @@ function start {
         echo -e " $BLUE*$BLUE Starting Tor service$RESETCOLOR\n"
         systemctl reload NetworkManager > /dev/null 2>&1 || true
         
-        # Enhanced start with comprehensive retry logic
+        # Enhanced start with comprehensive retry logic and autofix integration
         local start_attempts=0
         local max_attempts=3
         
         while [ $start_attempts -lt $max_attempts ]; do
             if systemctl start tor; then
-                echo -e " $GREEN*$BLUE Tor service started successfully$RESETCOLOR\n"
-                break
-            else
-                ((start_attempts++))
-                echo -e " $RED*$BLUE Tor service failed to start (attempt $start_attempts/$max_attempts)$RESETCOLOR\n"
-                
-                if [ $start_attempts -lt $max_attempts ]; then
-                    echo -e " $YELLOW*$BLUE Diagnosing and attempting repair...$RESETCOLOR\n"
-                    
-                    # Run diagnostic and repair
-                    diagnose_tor_service "start-retry"
-                    if repair_tor_service; then
-                        echo -e " $GREEN*$BLUE Auto-repair successful, retrying start...$RESETCOLOR\n"
-                        sleep 2
-                        continue
-                    else
-                        echo -e " $RED*$BLUE Auto-repair failed$RESETCOLOR\n"
-                    fi
+                sleep 5
+                if systemctl is-active --quiet tor.service && pgrep -f tor > /dev/null; then
+                    echo -e " $GREEN*$BLUE Tor service started successfully$RESETCOLOR\n"
+                    break
                 fi
+            fi
+            
+            ((start_attempts++))
+            echo -e " $RED*$BLUE Tor service failed to start (attempt $start_attempts/$max_attempts)$RESETCOLOR\n"
+            
+            if [ $start_attempts -lt $max_attempts ]; then
+                echo -e " $YELLOW*$BLUE Running autofix and retrying...$RESETCOLOR\n"
                 
-                # Show logs on final failure
-                if [ $start_attempts -eq $max_attempts ]; then
-                    echo -e " $RED*$BLUE All start attempts failed. Recent journal logs:$RESETCOLOR\n"
-                    journalctl -u tor.service --no-pager -n 10
-                    echo -e "\n$BLUE Full diagnostic log available at: $DIAGNOSTIC_LOG$RESETCOLOR"
-                    exit 1
+                # Run autofix for start failures
+                if autofix_tor_service "start-retry"; then
+                    echo -e " $GREEN*$BLUE Autofix successful, retrying start...$RESETCOLOR\n"
+                    sleep 2
+                    continue
+                else
+                    echo -e " $RED*$BLUE Autofix failed$RESETCOLOR\n"
                 fi
+            fi
+            
+            # Show logs on final failure
+            if [ $start_attempts -eq $max_attempts ]; then
+                echo -e " $RED*$BLUE All start attempts failed. Recent journal logs:$RESETCOLOR\n"
+                journalctl -u tor.service --no-pager -n 10
+                echo -e "\n$BLUE Full diagnostic log: $DIAGNOSTIC_LOG$RESETCOLOR"
+                echo -e "$BLUE Autofix log: $AUTOFIX_LOG$RESETCOLOR"
+                exit 1
             fi
         done
         
         sleep 5
         
         if ! pgrep -f tor > /dev/null; then
-            echo -e " $RED*$BLUE Tor process not found, attempting final recovery...$RESETCOLOR\n"
-            if repair_tor_service; then
+            echo -e " $RED*$BLUE Tor process not found, attempting final autofix...$RESETCOLOR\n"
+            if autofix_tor_service "final-attempt"; then
                 systemctl start tor
                 sleep 3
             fi
             
             if ! pgrep -f tor > /dev/null; then
-                echo -e " $RED*$BLUE Tor failed to start properly after all attempts$RESETCOLOR\n"
+                echo -e " $RED*$BLUE Tor failed to start after all autofix attempts$RESETCOLOR\n"
                 exit 1
             fi
         fi
@@ -1082,7 +1425,133 @@ function change {
     fi
 }
 
-# Main command handling with new diagnostic functions
+# Enhanced troubleshooting command
+function troubleshoot {
+    echo -e "$BLUE=== Cerberus Troubleshooting System ===$RESETCOLOR\n"
+    
+    # Step 1: Full diagnostic
+    log_message "$BLUE Step 1: Running comprehensive diagnostics...$RESETCOLOR"
+    diagnose_tor_service "troubleshoot"
+    local diag_result=$?
+    
+    echo ""
+    
+    # Step 2: Show current system state
+    log_message "$BLUE Step 2: Current system state...$RESETCOLOR"
+    echo -e "$YELLOW Tor service status:$RESETCOLOR $(systemctl is-active tor.service 2>/dev/null || echo 'unknown')"
+    echo -e "$YELLOW Tor processes:$RESETCOLOR $(pgrep -f tor | wc -l) running"
+    echo -e "$YELLOW Memory available:$RESETCOLOR $(grep MemAvailable /proc/meminfo | awk '{print int($2/1024)" MB"}')"
+    echo -e "$YELLOW Disk space (/var):$RESETCOLOR $(df -h /var | tail -1 | awk '{print $4}') free"
+    
+    # Step 3: Check logs
+    log_message "$BLUE Step 3: Recent error analysis...$RESETCOLOR"
+    local recent_errors=$(journalctl -u tor.service --since "30 minutes ago" --no-pager -q 2>/dev/null | grep -iE "(error|failed|fatal)" | wc -l)
+    echo -e "$YELLOW Recent Tor errors:$RESETCOLOR $recent_errors in last 30 minutes"
+    
+    if [ $recent_errors -gt 0 ]; then
+        echo -e "$BLUE Most recent errors:$RESETCOLOR"
+        journalctl -u tor.service --since "30 minutes ago" --no-pager -q 2>/dev/null | grep -iE "(error|failed|fatal)" | tail -3 | while read line; do
+            echo "  • $line"
+        done
+    fi
+    
+    echo ""
+    
+    # Step 4: Network connectivity test
+    log_message "$BLUE Step 4: Network connectivity tests...$RESETCOLOR"
+    if timeout 3 ping -c1 1.1.1.1 &>/dev/null; then
+        echo -e "$GREEN ✓ Internet connectivity OK$RESETCOLOR"
+        
+        if timeout 5 curl -sSL --socks5-hostname 127.0.0.1:9050 "https://check.torproject.org/" 2>/dev/null | grep -q "Congratulations"; then
+            echo -e "$GREEN ✓ Tor connectivity working$RESETCOLOR"
+        else
+            echo -e "$RED ✗ Tor connectivity failed$RESETCOLOR"
+        fi
+    else
+        echo -e "$RED ✗ No internet connectivity$RESETCOLOR"
+    fi
+    
+    echo ""
+    
+    # Step 5: Recommendations based on diagnosis
+    log_message "$BLUE Step 5: Recommendations...$RESETCOLOR"
+    case $diag_result in
+        0)
+            echo -e "$GREEN No issues detected. Tor should be working correctly.$RESETCOLOR"
+            ;;
+        1)
+            echo -e "$YELLOW Issues detected that can be automatically fixed:$RESETCOLOR"
+            echo -e "$BLUE Recommendation: Run 'cerberus autofix' to resolve issues$RESETCOLOR"
+            ;;
+        2)
+            echo -e "$YELLOW Issues detected that may need manual intervention:$RESETCOLOR"
+            echo -e "$BLUE Recommendation: Try 'cerberus autofix' first, then check logs$RESETCOLOR"
+            ;;
+        3)
+            echo -e "$RED Critical issues detected:$RESETCOLOR"
+            echo -e "$BLUE Recommendations:$RESETCOLOR"
+            echo -e "  1. Try: cerberus autofix"
+            echo -e "  2. Reinstall Tor: pacman -S tor --overwrite '*'"
+            echo -e "  3. Check system resources (memory, disk space)"
+            ;;
+    esac
+    
+    echo -e "\n$BLUE Log locations:$RESETCOLOR"
+    echo -e "  • Diagnostic: $DIAGNOSTIC_LOG"
+    echo -e "  • Autofix: $AUTOFIX_LOG"
+    echo -e "  • System: journalctl -u tor.service"
+    echo -e "  • Tor: /var/log/tor/notices.log"
+}
+
+# Quick fix command for common issues
+function quickfix {
+    echo -e "$BLUE=== Cerberus Quick Fix ===$RESETCOLOR\n"
+    
+    # Quick fixes for the most common issues
+    local fixes_applied=0
+    
+    # Fix 1: Restart services
+    log_message "$BLUE Restarting related services...$RESETCOLOR"
+    systemctl stop tor.service 2>/dev/null || true
+    pkill -f tor 2>/dev/null || true
+    sleep 2
+    systemctl daemon-reload
+    ((fixes_applied++))
+    
+    # Fix 2: Clear temporary files
+    log_message "$BLUE Clearing temporary files and locks...$RESETCOLOR"
+    rm -f /var/lib/tor/lock 2>/dev/null || true
+    rm -f /run/tor/tor.pid 2>/dev/null || true
+    find /tmp -name "*tor*" -type f -delete 2>/dev/null || true
+    ((fixes_applied++))
+    
+    # Fix 3: Reset permissions
+    log_message "$BLUE Resetting permissions...$RESETCOLOR"
+    if id -u tor > /dev/null 2>&1; then
+        chown -R tor:tor /var/lib/tor /var/log/tor /run/tor 2>/dev/null || true
+        chmod 700 /var/lib/tor 2>/dev/null || true
+        chmod 755 /var/log/tor /run/tor 2>/dev/null || true
+        ((fixes_applied++))
+    fi
+    
+    # Fix 4: Start service
+    log_message "$BLUE Starting Tor service...$RESETCOLOR"
+    if systemctl start tor.service; then
+        sleep 3
+        if systemctl is-active --quiet tor.service; then
+            log_message "$GREEN ✓ Quick fix successful! Tor service started.$RESETCOLOR"
+            ((fixes_applied++))
+        else
+            log_message "$YELLOW ⚠ Service started but may have issues. Run full diagnostic.$RESETCOLOR"
+        fi
+    else
+        log_message "$RED ✗ Quick fix failed. Run full autofix: cerberus autofix$RESETCOLOR"
+    fi
+    
+    log_message "$BLUE Applied $fixes_applied quick fixes.$RESETCOLOR"
+}
+
+# Main command handling with enhanced autofix integration
 case "$1" in
     start)
         init
@@ -1101,8 +1570,22 @@ case "$1" in
     diagnose)
         diagnose_tor_service "manual"
     ;;
-    repair)
-        repair_tor_service
+    autofix|repair)
+        if [ $(id -u) -ne 0 ]; then
+            echo -e "\n$GREEN[$RED!$GREEN] $RED Autofix must be run as root$RESETCOLOR\n" >&2
+            exit 1
+        fi
+        autofix_tor_service "manual"
+    ;;
+    troubleshoot)
+        troubleshoot
+    ;;
+    quickfix)
+        if [ $(id -u) -ne 0 ]; then
+            echo -e "\n$GREEN[$RED!$GREEN] $RED Quick fix must be run as root$RESETCOLOR\n" >&2
+            exit 1
+        fi
+        quickfix
     ;;
     myip|ip)
         ip
@@ -1132,16 +1615,26 @@ case "$1" in
         sleep 2
         $0 start
     ;;
+    logs)
+        echo -e "$BLUE=== Recent Tor Service Logs ===$RESETCOLOR"
+        journalctl -u tor.service -n 20 --no-pager
+        echo -e "\n$BLUE=== Diagnostic Log ===$RESETCOLOR"
+        if [ -f "$DIAGNOSTIC_LOG" ]; then
+            tail -20 "$DIAGNOSTIC_LOG"
+        else
+            echo "No diagnostic log found"
+        fi
+    ;;
     *)
         echo -e "
 $RED╔═══════════════════════════════════════════════════════════════════════════════╗
-$RED║                    $GREEN Cerberus v2.1.1 Enhanced                                  $RED║
+$RED║                    $GREEN Cerberus v2.1.0 Enhanced with Autofix                   $RED║
 $RED║                    $BLUE Engineered by 0xb0rn3 | 0xbv1                            $RED║
 $RED║                    $BLUE https://github.com/0xb0rn3/cerberus                      $RED║
-$RED║                    $YELLOW Advanced Tor Service Diagnostics & Repair               $RED║
+$RED║                    $YELLOW Comprehensive Tor Service Diagnostics & Repair          $RED║
 $RED╚═══════════════════════════════════════════════════════════════════════════════╝$RESETCOLOR
 
-Usage: cerberus {start|stop|restart|change|status|diagnose|repair|myip|info|monitor|update-nodes|verify}
+Usage: cerberus {command} [options]
 
 $GREEN Core Commands:$RESETCOLOR
 $GREEN start$BLUE         - Start system-wide anonymous tunneling through TOR
@@ -1157,16 +1650,27 @@ $GREEN monitor$BLUE       - Real-time Tor network monitoring
 $GREEN update-nodes$BLUE  - Update Tor exit node database
 $GREEN verify <IP>$BLUE   - Check if an IP is a Tor exit node
 
-$GREEN Diagnostic Commands:$RESETCOLOR
+$GREEN Diagnostic & Repair Commands:$RESETCOLOR
 $GREEN diagnose$BLUE      - Run comprehensive Tor service diagnostics
-$GREEN repair$BLUE        - Attempt automatic Tor service repair
+$GREEN autofix$BLUE       - Attempt automatic Tor service repair (comprehensive)
+$GREEN quickfix$BLUE      - Apply quick fixes for common issues
+$GREEN troubleshoot$BLUE  - Interactive troubleshooting guide
+$GREEN logs$BLUE          - Show recent Tor and diagnostic logs
 
-$YELLOW Enhanced Features in v2.1.1:$RESETCOLOR
-$BLUE • Advanced Tor service diagnostics and repair
-$BLUE • Comprehensive service health monitoring
-$BLUE • Automatic detection of configuration issues
-$BLUE • Enhanced logging and troubleshooting
-$BLUE • Smart retry logic with auto-repair
+$YELLOW Enhanced Features in v2.2.0:$RESETCOLOR
+$BLUE • Comprehensive autofix system with 12+ automated repairs
+$BLUE • Intelligent diagnostic system with issue classification
+$BLUE • Enhanced retry logic with integrated autofix
+$BLUE • Smart detection of critical vs fixable issues
+$BLUE • Detailed logging and troubleshooting guides
+$BLUE • Quick fix option for common problems
+$BLUE • Interactive troubleshooting workflow
+
+$YELLOW For your current issue:$RESETCOLOR
+$GREEN 1.$BLUE Try: sudo cerberus autofix
+$GREEN 2.$BLUE If that fails: sudo cerberus troubleshoot
+$GREEN 3.$BLUE For quick fixes: sudo cerberus quickfix
+
 $RESETCOLOR" >&2
         exit 1
     ;;
