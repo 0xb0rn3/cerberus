@@ -11,7 +11,7 @@
 # Short-Description: Cerberus Pandora RAM cleaner
 ### END INIT INFO
 
-# Cerberus Pandora v1.0.0AlfaStable - RAM Memory Cleaner
+# Cerberus Pandora v2.1.0 - Enhanced RAM Memory Cleaner
 # Engineered by 0xb0rn3 | 0xbv1
 # Repository: https://github.com/0xb0rn3/cerberus
 # License: GNU General Public License v3
@@ -19,40 +19,167 @@
 export BLUE='\033[1;94m'
 export GREEN='\033[1;92m'
 export RED='\033[1;91m'
+export YELLOW='\033[1;93m'
 export RESETCOLOR='\033[1;00m'
 
+LOG_FILE="/var/log/cerberus/pandora.log"
+
+# Create log directory if it doesn't exist
+mkdir -p /var/log/cerberus
+
+function log_message {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+    if [ -t 1 ]; then
+        echo -e "$1"
+    fi
+}
+
 function bomb {
-    echo -e "$GREEN Starting Cerberus Pandora RAM cleaner$RESETCOLOR"
-    sleep 2
+    log_message "$GREEN Starting Cerberus Pandora RAM cleaner v2.1.0$RESETCOLOR"
+    sleep 1
     
-    echo -e "$BLUE Pandora is optimizing memory$RESETCOLOR"
-    echo 1024 > /proc/sys/vm/min_free_kbytes
-    echo 3 > /proc/sys/vm/drop_caches
-    echo 1 > /proc/sys/vm/oom_kill_allocating_task
-    echo 1 > /proc/sys/vm/overcommit_memory
-    echo 0 > /proc/sys/vm/oom_dump_tasks
+    log_message "$BLUE Pandora is optimizing memory subsystem$RESETCOLOR"
     
-    echo -e "$BLUE Pandora is wiping RAM$RESETCOLOR"
-    if command -v sdmem > /dev/null; then
-        sdmem -fllv
-    else
-        echo -e "$RED sdmem not found, install secure-delete package$RESETCOLOR"
-        # Alternative memory clearing method
-        sync && echo 1 > /proc/sys/vm/drop_caches
-        sync && echo 2 > /proc/sys/vm/drop_caches
-        sync && echo 3 > /proc/sys/vm/drop_caches
+    # Memory optimization settings
+    if [ -w /proc/sys/vm/min_free_kbytes ]; then
+        echo 2048 > /proc/sys/vm/min_free_kbytes
+        log_message "Set min_free_kbytes to 2048"
     fi
     
-    echo -e "$GREEN RAM cleaning completed$RESETCOLOR"
-    echo -e "$GREEN Cerberus Pandora finished$RESETCOLOR"
+    if [ -w /proc/sys/vm/drop_caches ]; then
+        sync
+        echo 3 > /proc/sys/vm/drop_caches
+        log_message "Dropped all caches"
+    fi
+    
+    if [ -w /proc/sys/vm/oom_kill_allocating_task ]; then
+        echo 1 > /proc/sys/vm/oom_kill_allocating_task
+        log_message "Enabled OOM kill allocating task"
+    fi
+    
+    if [ -w /proc/sys/vm/overcommit_memory ]; then
+        echo 1 > /proc/sys/vm/overcommit_memory
+        log_message "Set memory overcommit to heuristic"
+    fi
+    
+    if [ -w /proc/sys/vm/oom_dump_tasks ]; then
+        echo 0 > /proc/sys/vm/oom_dump_tasks
+        log_message "Disabled OOM task dumping"
+    fi
+    
+    log_message "$BLUE Pandora is wiping sensitive memory areas$RESETCOLOR"
+    
+    # Enhanced memory wiping
+    if command -v sdmem > /dev/null; then
+        log_message "Using secure-delete for memory wiping"
+        sdmem -fllv 2>/dev/null || log_message "$YELLOW sdmem execution completed with warnings$RESETCOLOR"
+    else
+        log_message "$YELLOW sdmem not found, using alternative memory clearing$RESETCOLOR"
+        
+        # Alternative memory clearing methods
+        sync
+        
+        # Clear page cache, dentries and inodes
+        echo 1 > /proc/sys/vm/drop_caches 2>/dev/null || true
+        sync
+        echo 2 > /proc/sys/vm/drop_caches 2>/dev/null || true
+        sync  
+        echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
+        sync
+        
+        # Force memory reclaim
+        if [ -w /proc/sys/vm/compact_memory ]; then
+            echo 1 > /proc/sys/vm/compact_memory
+        fi
+    fi
+    
+    # Clear swap if available
+    if command -v swapon > /dev/null && swapon -s | grep -q "/"; then
+        log_message "$BLUE Clearing swap space$RESETCOLOR"
+        swapoff -a 2>/dev/null && swapon -a 2>/dev/null || log_message "$YELLOW Swap operations completed with warnings$RESETCOLOR"
+    fi
+    
+    # Clear temporary files
+    log_message "$BLUE Clearing temporary files$RESETCOLOR"
+    find /tmp -type f -name "*.tmp" -delete 2>/dev/null || true
+    find /var/tmp -type f -name "*.tmp" -delete 2>/dev/null || true
+    find /tmp -type f -name "core.*" -delete 2>/dev/null || true
+    
+    # Clear bash history and other sensitive files
+    if [ -f /root/.bash_history ]; then
+        shred -vfz -n 3 /root/.bash_history 2>/dev/null || > /root/.bash_history
+    fi
+    
+    # Clear systemd journal if too large
+    if command -v journalctl > /dev/null; then
+        journalctl --vacuum-time=1d --vacuum-size=100M 2>/dev/null || true
+    fi
+    
+    # Memory statistics
+    if [ -r /proc/meminfo ]; then
+        local free_mem=$(grep MemAvailable /proc/meminfo | awk '{print $2}')
+        local total_mem=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+        if [ -n "$free_mem" ] && [ -n "$total_mem" ]; then
+            local percent=$((free_mem * 100 / total_mem))
+            log_message "$GREEN Memory cleanup completed - $percent% available$RESETCOLOR"
+        fi
+    fi
+    
+    log_message "$GREEN Cerberus Pandora operation completed successfully$RESETCOLOR"
+    sync
+}
+
+function status {
+    echo -e "$BLUE Cerberus Pandora Status:$RESETCOLOR"
+    
+    if [ -r /proc/meminfo ]; then
+        echo -e "$GREEN Memory Information:$RESETCOLOR"
+        grep -E "(MemTotal|MemAvailable|MemFree|Cached|SwapTotal|SwapFree)" /proc/meminfo | \
+        while read line; do
+            echo "  $line"
+        done
+    fi
+    
+    if [ -f "$LOG_FILE" ]; then
+        echo -e "\n$GREEN Last Operations:$RESETCOLOR"
+        tail -n 5 "$LOG_FILE"
+    fi
+}
+
+function help_text {
+    echo -e "$RED╔═══════════════════════════════════════════════════════════════════════════════╗
+$RED║                  $GREEN Cerberus Pandora v2.1.0                                     $RED║
+$RED║                  $BLUE Enhanced RAM Memory Cleaner                                  $RED║
+$RED║                  $BLUE Engineered by 0xb0rn3 | 0xbv1                              $RED║
+$RED║                  $BLUE https://github.com/0xb0rn3/cerberus                        $RED║
+$RED╚═══════════════════════════════════════════════════════════════════════════════╝$RESETCOLOR
+
+Usage: cerberus-pandora {bomb|status|help}
+
+$GREEN Commands:$RESETCOLOR
+$GREEN bomb$BLUE     - Clean and wipe RAM memory (primary function)
+$GREEN status$BLUE   - Show memory status and recent operations
+$GREEN help$BLUE     - Display this help message
+
+$YELLOW Features:$RESETCOLOR
+$BLUE • Secure memory wiping using sdmem (if available)
+$BLUE • System cache clearing and optimization
+$BLUE • Swap space clearing
+$BLUE • Temporary file cleanup
+$BLUE • Memory statistics and logging
+
+$YELLOW Note:$RESETCOLOR This tool is designed to run during system shutdown
+to ensure sensitive data in RAM is properly cleared."
 }
 
 case "$1" in
     start)
-        echo -e "$RED Use 'bomb' command instead$RESETCOLOR"
+        echo -e "$YELLOW Use 'bomb' command instead$RESETCOLOR"
+        exit 1
     ;;
     restart|reload|force-reload)
-        echo -e "$RED Use 'bomb' command instead$RESETCOLOR"
+        echo -e "$YELLOW Use 'bomb' command instead$RESETCOLOR"  
+        exit 1
     ;;
     stop)
         bomb
@@ -60,18 +187,15 @@ case "$1" in
     bomb)
         bomb
     ;;
+    status)
+        status
+    ;;
+    help|--help|-h)
+        help_text
+    ;;
     *)
-        echo -e "
-$RED╔═══════════════════════════════════════════════════════════════════════════════╗
-$RED║                  $GREEN Cerberus Pandora v1.0.0AlfaStable                          $RED║
-$RED║                  $BLUE Engineered by 0xb0rn3 | 0xbv1                              $RED║
-$RED║                  $BLUE https://github.com/0xb0rn3/cerberus                        $RED║
-$RED╚═══════════════════════════════════════════════════════════════════════════════╝$RESETCOLOR
-
-Usage: cerberus-pandora bomb
-
-$GREEN bomb$BLUE - Clean and wipe RAM memory
-$RESETCOLOR"
+        help_text
+        exit 1
     ;;
 esac
 
