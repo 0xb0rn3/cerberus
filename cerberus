@@ -307,7 +307,6 @@ RunAsDaemon 1
 # Security settings
 AvoidDiskWrites 1
 DataDirectory /var/lib/tor
-User tor
 PidFile /run/tor/tor.pid
 
 # Control port for identity changes and monitoring
@@ -317,21 +316,15 @@ CookieAuthFileGroupReadable 1
 CookieAuthFile /run/tor/control.authcookie
 
 # Performance optimizations
-NumCPUs 2
 CircuitBuildTimeout 10
 LearnCircuitBuildTimeout 0
-CircuitIdleTimeout 60
-CircuitStreamTimeout 60
 ClientOnly 1
-ExcludeSingleHopRelays 1
-EnforceDistinctSubnets 1
 NewCircuitPeriod 30
 MaxCircuitDirtiness 600
 
 # Connection settings
 KeepAlivePeriod 60
 ConnLimit 2048
-ReducedConnectionPadding 1
 
 # Logging
 Log notice file /var/log/tor/notices.log
@@ -460,9 +453,12 @@ function get_tor_info {
     fi
     
     # Circuit info from Tor control port
-    if command -v nc > /dev/null 2>&1; then
+    if command -v nc > /dev/null 2>&1 || command -v netcat > /dev/null 2>&1; then
+        local nc_cmd="nc"
+        command -v nc > /dev/null 2>&1 || nc_cmd="netcat"
+        
         echo -e "\n$BLUE Tor Circuits:$RESETCOLOR"
-        echo -e "AUTHENTICATE\nGETINFO circuit-status\nQUIT" | nc 127.0.0.1 9051 2>/dev/null | \
+        echo -e "AUTHENTICATE\nGETINFO circuit-status\nQUIT" | $nc_cmd 127.0.0.1 9051 2>/dev/null | \
             grep -E "^[0-9]+ BUILT" | head -3 | while read line; do
                 echo "  • $line"
             done
@@ -482,6 +478,9 @@ function get_tor_info {
 function monitor_tor {
     echo -e "\n$BLUE Starting Tor network monitor...$RESETCOLOR"
     echo -e "$YELLOW Press Ctrl+C to stop$RESETCOLOR\n"
+    
+    local nc_cmd="nc"
+    command -v nc > /dev/null 2>&1 || nc_cmd="netcat"
     
     while true; do
         clear
@@ -511,17 +510,17 @@ function monitor_tor {
         fi
         
         # Bandwidth usage (if control port is available)
-        if command -v nc > /dev/null 2>&1; then
+        if command -v $nc_cmd > /dev/null 2>&1; then
             echo -e "\n$BLUE Bandwidth (last 5 seconds):$RESETCOLOR"
             timeout 1 echo -e "AUTHENTICATE\nGETINFO traffic/read\nGETINFO traffic/written\nQUIT" | \
-                nc 127.0.0.1 9051 2>/dev/null | grep -E "^250-" | sed 's/250-traffic\//  /'
+                $nc_cmd 127.0.0.1 9051 2>/dev/null | grep -E "^250-" | sed 's/250-traffic\//  /'
         fi
         
         # Active circuits
         echo -e "\n$BLUE Active circuits:$RESETCOLOR"
-        if command -v nc > /dev/null 2>&1; then
+        if command -v $nc_cmd > /dev/null 2>&1; then
             timeout 1 echo -e "AUTHENTICATE\nGETINFO circuit-status\nQUIT" | \
-                nc 127.0.0.1 9051 2>/dev/null | grep "BUILT" | wc -l | xargs echo "  •"
+                $nc_cmd 127.0.0.1 9051 2>/dev/null | grep "BUILT" | wc -l | xargs echo "  •"
         fi
         
         sleep 5
@@ -865,13 +864,17 @@ function change {
         # Get current IP before change
         local old_ip=$(timeout 3 curl -sSL --socks5-hostname 127.0.0.1:9050 "https://api.ipify.org" 2>/dev/null)
         
+        # Determine netcat command
+        local nc_cmd="nc"
+        command -v nc > /dev/null 2>&1 || nc_cmd="netcat"
+        
         # Method 1: Control port with cookie auth
         if [ -f /run/tor/control.authcookie ]; then
             hexcookie=$(xxd -p -c 32 /run/tor/control.authcookie)
-            echo -e "AUTHENTICATE $hexcookie\nSIGNAL NEWNYM\nQUIT" | nc 127.0.0.1 9051 &>/dev/null
+            echo -e "AUTHENTICATE $hexcookie\nSIGNAL NEWNYM\nQUIT" | $nc_cmd 127.0.0.1 9051 &>/dev/null
         else
             # Method 2: Try without auth
-            echo -e "AUTHENTICATE\nSIGNAL NEWNYM\nQUIT" | nc 127.0.0.1 9051 &>/dev/null
+            echo -e "AUTHENTICATE\nSIGNAL NEWNYM\nQUIT" | $nc_cmd 127.0.0.1 9051 &>/dev/null
         fi
         
         # Method 3: Reload service as fallback
