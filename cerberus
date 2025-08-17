@@ -241,9 +241,9 @@ function get_tor_info {
     fi
     
     # Circuit info from Tor control port
-    if [ -S /run/tor/control ]; then
+    if command -v nc > /dev/null 2>&1; then
         echo -e "\n$BLUE Tor Circuits:$RESETCOLOR"
-        echo -e "AUTHENTICATE\nGETINFO circuit-status\nQUIT" | nc -U /run/tor/control 2>/dev/null | \
+        echo -e "AUTHENTICATE\nGETINFO circuit-status\nQUIT" | nc 127.0.0.1 9051 2>/dev/null | \
             grep -E "^[0-9]+ BUILT" | head -3 | while read line; do
                 echo "  • $line"
             done
@@ -285,178 +285,14 @@ function monitor_tor {
             if verify_tor_exit "$current_ip"; then
                 echo -e "$GREEN ✓ Verification: Confirmed Tor exit$RESETCOLOR"
             else
-                echo -e "$YELLOW ⚠ IP unchanged. Circuit may be building...$RESETCOLOR"
-            fi
-        else
-            echo -e "$GREEN ✓ Signal sent. New circuits building...$RESETCOLOR"
-        fi
-    else
-        echo -e " $RED*$BLUE Tor is not running$RESETCOLOR\n"
-    fi
-}
-
-function status {
-    echo -e "\n$GREEN[$BLUE i$GREEN ]$BLUE Cerberus Status:$RESETCOLOR\n"
-    
-    if systemctl is-active --quiet tor; then
-        echo -e "$GREEN ✓ Tor service is running$RESETCOLOR"
-        
-        if iptables -t nat -L OUTPUT | grep -q "REDIRECT"; then
-            echo -e "$GREEN ✓ Cerberus tunnel is active$RESETCOLOR"
-        else
-            echo -e "$RED ✗ Cerberus tunnel is not active$RESETCOLOR"
-        fi
-        
-        if timeout 5 curl -s --socks5-hostname 127.0.0.1:9050 https://check.torproject.org/ | grep -q "Congratulations"; then
-            echo -e "$GREEN ✓ Tor connection is working$RESETCOLOR"
-        else
-            echo -e "$RED ✗ Tor connection test failed$RESETCOLOR"
-        fi
-        
-        # Check exit nodes cache
-        if [ -f "$EXIT_NODES_FILE" ]; then
-            local nodes_count=$(wc -l < "$EXIT_NODES_FILE")
-            local last_update=$(stat -c %y "$EXIT_NODES_FILE" | cut -d'.' -f1)
-            echo -e "$GREEN ✓ Exit nodes database: $nodes_count nodes (updated: $last_update)$RESETCOLOR"
-        else
-            echo -e "$YELLOW ⚠ Exit nodes database not found$RESETCOLOR"
-        fi
-    else
-        echo -e "$RED ✗ Tor service is not running$RESETCOLOR"
-    fi
-    
-    if [ -f /etc/sysctl.d/98-cerberus.conf ]; then
-        echo -e "$GREEN ✓ IPv6 is disabled$RESETCOLOR"
-    else
-        echo -e "$BLUE ℹ IPv6 is enabled$RESETCOLOR"
-    fi
-    
-    echo ""
-}
-
-function starti2p {
-    echo -e -n " $GREEN*$BLUE starting I2P services$RESETCOLOR\n"
-    systemctl stop tor 2>/dev/null || true
-    
-    if [ "$resolved_support" = true ]; then
-        cp /etc/systemd/resolved.conf /etc/systemd/resolved.conf.bak
-        echo -e "[Resolve]\nDNS=127.0.0.1\nFallbackDNS=209.222.18.222 209.222.18.218" > /etc/systemd/resolved.conf
-        systemctl restart systemd-resolved
-    else
-        cp /etc/resolv.conf /etc/resolv.conf.bak
-        echo -e 'nameserver 127.0.0.1\nnameserver 209.222.18.222\nnameserver 209.222.18.218' > /etc/resolv.conf
-    fi
-    
-    if systemctl is-enabled i2pd &>/dev/null; then
-        systemctl start i2pd
-        sleep 5
-        echo -e " $GREEN*$BLUE I2P started on http://127.0.0.1:7657$RESETCOLOR\n"
-    else
-        echo -e " $RED*$BLUE I2P not installed or configured$RESETCOLOR\n"
-    fi
-}
-
-function stopi2p {
-    echo -e -n " $GREEN*$BLUE stopping I2P services$RESETCOLOR\n"
-    systemctl stop i2pd 2>/dev/null || true
-    
-    if [ "$resolved_support" = true ]; then
-        if [ -e /etc/systemd/resolved.conf.bak ]; then
-            mv /etc/systemd/resolved.conf.bak /etc/systemd/resolved.conf
-            systemctl restart systemd-resolved
-        fi
-    else
-        if [ -e /etc/resolv.conf.bak ]; then
-            mv /etc/resolv.conf.bak /etc/resolv.conf
-        fi
-    fi
-}
-
-case "$1" in
-    start)
-        init
-        start
-    ;;
-    stop)
-        init
-        stop
-    ;;
-    change)
-        change
-    ;;
-    status)
-        status
-    ;;
-    myip|ip)
-        ip
-    ;;
-    info)
-        get_tor_info
-    ;;
-    monitor)
-        monitor_tor
-    ;;
-    update-nodes)
-        update_exit_nodes
-    ;;
-    verify)
-        if [ -z "$2" ]; then
-            echo "Usage: cerberus verify <IP>"
-            exit 1
-        fi
-        if verify_tor_exit "$2"; then
-            echo -e "$GREEN ✓ $2 is a Tor exit node$RESETCOLOR"
-        else
-            echo -e "$RED ✗ $2 is NOT a Tor exit node$RESETCOLOR"
-        fi
-    ;;
-    starti2p)
-        starti2p
-    ;;
-    stopi2p)
-        stopi2p
-    ;;
-    restart)
-        $0 stop
-        sleep 2
-        $0 start
-    ;;
-    *)
-        echo -e "
-$RED╔═══════════════════════════════════════════════════════════════════════════════╗
-$RED║                    $GREEN Cerberus v2.0.0                                           $RED║
-$RED║                    $BLUE Engineered by 0xb0rn3 | 0xbv1                            $RED║
-$RED║                    $BLUE https://github.com/0xb0rn3/cerberus                      $RED║
-$RED╚═══════════════════════════════════════════════════════════════════════════════╝$RESETCOLOR
-
-Usage: cerberus {start|stop|restart|change|status|myip|info|monitor|update-nodes|verify|starti2p|stopi2p}
-
-$GREEN start$BLUE         - Start system-wide anonymous tunneling through TOR
-$GREEN stop$BLUE          - Stop anonymous tunneling and restore original settings  
-$GREEN restart$BLUE       - Restart Cerberus (stop + start)
-$GREEN change$BLUE        - Change TOR identity (get new exit node)
-$GREEN status$BLUE        - Check if Cerberus is running
-$GREEN myip$BLUE          - Show current IP address
-$GREEN info$BLUE          - Show detailed Tor network information
-$GREEN monitor$BLUE       - Real-time Tor network monitoring
-$GREEN update-nodes$BLUE  - Update Tor exit node database
-$GREEN verify <IP>$BLUE   - Check if an IP is a Tor exit node
-$GREEN starti2p$BLUE      - Start I2P services
-$GREEN stopi2p$BLUE       - Stop I2P services
-$RESETCOLOR" >&2
-        exit 1
-    ;;
-esac
-
-echo -e $RESETCOLOR
-exit 0 Verification: Unconfirmed$RESETCOLOR"
+                echo -e "$YELLOW ⚠ Verification: Unconfirmed$RESETCOLOR"
             fi
         else
             echo -e "$RED ✗ Cannot reach Tor network$RESETCOLOR"
         fi
         
-        # Bandwidth usage (if nyx is installed)
-        if command -v nyx > /dev/null 2>&1; then
+        # Bandwidth usage (if control port is available)
+        if command -v nc > /dev/null 2>&1; then
             echo -e "\n$BLUE Bandwidth (last 5 seconds):$RESETCOLOR"
             timeout 1 echo -e "AUTHENTICATE\nGETINFO traffic/read\nGETINFO traffic/written\nQUIT" | \
                 nc 127.0.0.1 9051 2>/dev/null | grep -E "^250-" | sed 's/250-traffic\//  /'
@@ -464,8 +300,10 @@ exit 0 Verification: Unconfirmed$RESETCOLOR"
         
         # Active circuits
         echo -e "\n$BLUE Active circuits:$RESETCOLOR"
-        timeout 1 echo -e "AUTHENTICATE\nGETINFO circuit-status\nQUIT" | \
-            nc 127.0.0.1 9051 2>/dev/null | grep "BUILT" | wc -l | xargs echo "  •"
+        if command -v nc > /dev/null 2>&1; then
+            timeout 1 echo -e "AUTHENTICATE\nGETINFO circuit-status\nQUIT" | \
+                nc 127.0.0.1 9051 2>/dev/null | grep "BUILT" | wc -l | xargs echo "  •"
+        fi
         
         sleep 5
     done
@@ -801,4 +639,168 @@ function change {
                 echo -e "$BLUE   Old IP: $old_ip$RESETCOLOR"
                 echo -e "$GREEN   New IP: $new_ip$RESETCOLOR"
             else
-                echo -e "$YELLOW ⚠
+                echo -e "$YELLOW ⚠ IP unchanged. Circuit may be building...$RESETCOLOR"
+            fi
+        else
+            echo -e "$GREEN ✓ Signal sent. New circuits building...$RESETCOLOR"
+        fi
+    else
+        echo -e " $RED*$BLUE Tor is not running$RESETCOLOR\n"
+    fi
+}
+
+function status {
+    echo -e "\n$GREEN[$BLUE i$GREEN ]$BLUE Cerberus Status:$RESETCOLOR\n"
+    
+    if systemctl is-active --quiet tor; then
+        echo -e "$GREEN ✓ Tor service is running$RESETCOLOR"
+        
+        if iptables -t nat -L OUTPUT | grep -q "REDIRECT"; then
+            echo -e "$GREEN ✓ Cerberus tunnel is active$RESETCOLOR"
+        else
+            echo -e "$RED ✗ Cerberus tunnel is not active$RESETCOLOR"
+        fi
+        
+        if timeout 5 curl -s --socks5-hostname 127.0.0.1:9050 https://check.torproject.org/ | grep -q "Congratulations"; then
+            echo -e "$GREEN ✓ Tor connection is working$RESETCOLOR"
+        else
+            echo -e "$RED ✗ Tor connection test failed$RESETCOLOR"
+        fi
+        
+        # Check exit nodes cache
+        if [ -f "$EXIT_NODES_FILE" ]; then
+            local nodes_count=$(wc -l < "$EXIT_NODES_FILE")
+            local last_update=$(stat -c %y "$EXIT_NODES_FILE" | cut -d'.' -f1)
+            echo -e "$GREEN ✓ Exit nodes database: $nodes_count nodes (updated: $last_update)$RESETCOLOR"
+        else
+            echo -e "$YELLOW ⚠ Exit nodes database not found$RESETCOLOR"
+        fi
+    else
+        echo -e "$RED ✗ Tor service is not running$RESETCOLOR"
+    fi
+    
+    if [ -f /etc/sysctl.d/98-cerberus.conf ]; then
+        echo -e "$GREEN ✓ IPv6 is disabled$RESETCOLOR"
+    else
+        echo -e "$BLUE ℹ IPv6 is enabled$RESETCOLOR"
+    fi
+    
+    echo ""
+}
+
+function starti2p {
+    echo -e -n " $GREEN*$BLUE starting I2P services$RESETCOLOR\n"
+    systemctl stop tor 2>/dev/null || true
+    
+    if [ "$resolved_support" = true ]; then
+        cp /etc/systemd/resolved.conf /etc/systemd/resolved.conf.bak
+        echo -e "[Resolve]\nDNS=127.0.0.1\nFallbackDNS=209.222.18.222 209.222.18.218" > /etc/systemd/resolved.conf
+        systemctl restart systemd-resolved
+    else
+        cp /etc/resolv.conf /etc/resolv.conf.bak
+        echo -e 'nameserver 127.0.0.1\nnameserver 209.222.18.222\nnameserver 209.222.18.218' > /etc/resolv.conf
+    fi
+    
+    if systemctl is-enabled i2pd &>/dev/null; then
+        systemctl start i2pd
+        sleep 5
+        echo -e " $GREEN*$BLUE I2P started on http://127.0.0.1:7657$RESETCOLOR\n"
+    else
+        echo -e " $RED*$BLUE I2P not installed or configured$RESETCOLOR\n"
+    fi
+}
+
+function stopi2p {
+    echo -e -n " $GREEN*$BLUE stopping I2P services$RESETCOLOR\n"
+    systemctl stop i2pd 2>/dev/null || true
+    
+    if [ "$resolved_support" = true ]; then
+        if [ -e /etc/systemd/resolved.conf.bak ]; then
+            mv /etc/systemd/resolved.conf.bak /etc/systemd/resolved.conf
+            systemctl restart systemd-resolved
+        fi
+    else
+        if [ -e /etc/resolv.conf.bak ]; then
+            mv /etc/resolv.conf.bak /etc/resolv.conf
+        fi
+    fi
+}
+
+case "$1" in
+    start)
+        init
+        start
+    ;;
+    stop)
+        init
+        stop
+    ;;
+    change)
+        change
+    ;;
+    status)
+        status
+    ;;
+    myip|ip)
+        ip
+    ;;
+    info)
+        get_tor_info
+    ;;
+    monitor)
+        monitor_tor
+    ;;
+    update-nodes)
+        update_exit_nodes
+    ;;
+    verify)
+        if [ -z "$2" ]; then
+            echo "Usage: cerberus verify <IP>"
+            exit 1
+        fi
+        if verify_tor_exit "$2"; then
+            echo -e "$GREEN ✓ $2 is a Tor exit node$RESETCOLOR"
+        else
+            echo -e "$RED ✗ $2 is NOT a Tor exit node$RESETCOLOR"
+        fi
+    ;;
+    starti2p)
+        starti2p
+    ;;
+    stopi2p)
+        stopi2p
+    ;;
+    restart)
+        $0 stop
+        sleep 2
+        $0 start
+    ;;
+    *)
+        echo -e "
+$RED╔═══════════════════════════════════════════════════════════════════════════════╗
+$RED║                    $GREEN Cerberus v2.0.0                                           $RED║
+$RED║                    $BLUE Engineered by 0xb0rn3 | 0xbv1                            $RED║
+$RED║                    $BLUE https://github.com/0xb0rn3/cerberus                      $RED║
+$RED╚═══════════════════════════════════════════════════════════════════════════════╝$RESETCOLOR
+
+Usage: cerberus {start|stop|restart|change|status|myip|info|monitor|update-nodes|verify|starti2p|stopi2p}
+
+$GREEN start$BLUE         - Start system-wide anonymous tunneling through TOR
+$GREEN stop$BLUE          - Stop anonymous tunneling and restore original settings  
+$GREEN restart$BLUE       - Restart Cerberus (stop + start)
+$GREEN change$BLUE        - Change TOR identity (get new exit node)
+$GREEN status$BLUE        - Check if Cerberus is running
+$GREEN myip$BLUE          - Show current IP address
+$GREEN info$BLUE          - Show detailed Tor network information
+$GREEN monitor$BLUE       - Real-time Tor network monitoring
+$GREEN update-nodes$BLUE  - Update Tor exit node database
+$GREEN verify <IP>$BLUE   - Check if an IP is a Tor exit node
+$GREEN starti2p$BLUE      - Start I2P services
+$GREEN stopi2p$BLUE       - Stop I2P services
+$RESETCOLOR" >&2
+        exit 1
+    ;;
+esac
+
+echo -e $RESETCOLOR
+exit 0
