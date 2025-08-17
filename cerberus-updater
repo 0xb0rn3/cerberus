@@ -1,0 +1,294 @@
+#!/usr/bin/env bash
+
+# Cerberus Node Updater v2.0.0
+# Automated Tor exit node list updater with multi-source validation
+# Engineered by 0xb0rn3 | 0xbv1
+
+export BLUE='\033[1;94m'
+export GREEN='\033[1;92m'
+export RED='\033[1;91m'
+export YELLOW='\033[1;93m'
+export RESETCOLOR='\033[1;00m'
+
+CERBERUS_DIR="/var/lib/cerberus"
+CERBERUS_CACHE="$CERBERUS_DIR/cache"
+CERBERUS_LOGS="/var/log/cerberus"
+EXIT_NODES_FILE="$CERBERUS_CACHE/exit-nodes.txt"
+ALL_NODES_FILE="$CERBERUS_CACHE/all-nodes.txt"
+NODE_METADATA="$CERBERUS_CACHE/node-metadata.json"
+UPDATE_LOG="$CERBERUS_LOGS/updater.log"
+
+# Create directories if they don't exist
+mkdir -p "$CERBERUS_CACHE" "$CERBERUS_LOGS"
+
+function log_message {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$UPDATE_LOG"
+    if [ -t 1 ]; then
+        echo -e "$1"
+    fi
+}
+
+function fetch_dan_exit_nodes {
+    local temp_file="/tmp/dan-exits-$$"
+    local success=0
+    
+    log_message "$BLUE Fetching exit nodes from dan.me.uk...$RESETCOLOR"
+    
+    if timeout 15 curl -sSL "https://www.dan.me.uk/torlist/?exit" -o "$temp_file" 2>/dev/null; then
+        local count=$(grep -cE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' "$temp_file")
+        if [ $count -gt 100 ]; then
+            grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' "$temp_file" > "$EXIT_NODES_FILE.dan"
+            log_message "$GREEN ✓ Retrieved $count exit nodes from dan.me.uk$RESETCOLOR"
+            success=1
+        else
+            log_message "$YELLOW ⚠ Suspicious low count from dan.me.uk: $count$RESETCOLOR"
+        fi
+    else
+        log_message "$RED ✗ Failed to fetch from dan.me.uk$RESETCOLOR"
+    fi
+    
+    rm -f "$temp_file"
+    return $((1-success))
+}
+
+function fetch_github_nodes {
+    local temp_file="/tmp/github-exits-$$"
+    local success=0
+    
+    log_message "$BLUE Fetching exit nodes from GitHub...$RESETCOLOR"
+    
+    if timeout 15 curl -sSL "https://raw.githubusercontent.com/platformbuilds/Tor-IP-Addresses/master/tor-exit-nodes.lst" -o "$temp_file" 2>/dev/null; then
+        local count=$(grep -cE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' "$temp_file")
+        if [ $count -gt 100 ]; then
+            grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' "$temp_file" > "$EXIT_NODES_FILE.github"
+            log_message "$GREEN ✓ Retrieved $count exit nodes from GitHub$RESETCOLOR"
+            success=1
+        else
+            log_message "$YELLOW ⚠ Suspicious low count from GitHub: $count$RESETCOLOR"
+        fi
+    else
+        log_message "$RED ✗ Failed to fetch from GitHub$RESETCOLOR"
+    fi
+    
+    rm -f "$temp_file"
+    return $((1-success))
+}
+
+function fetch_all_nodes {
+    local temp_file="/tmp/all-nodes-$$"
+    
+    log_message "$BLUE Fetching all Tor nodes...$RESETCOLOR"
+    
+    if timeout 15 curl -sSL "https://www.dan.me.uk/torlist/" -o "$temp_file" 2>/dev/null; then
+        local count=$(grep -cE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' "$temp_file")
+        if [ $count -gt 1000 ]; then
+            grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' "$temp_file" > "$ALL_NODES_FILE"
+            log_message "$GREEN ✓ Retrieved $count total Tor nodes$RESETCOLOR"
+        else
+            log_message "$YELLOW ⚠ Suspicious low count for all nodes: $count$RESETCOLOR"
+        fi
+    else
+        log_message "$RED ✗ Failed to fetch all nodes$RESETCOLOR"
+    fi
+    
+    rm -f "$temp_file"
+}
+
+function validate_and_merge {
+    log_message "$BLUE Validating and merging node lists...$RESETCOLOR"
+    
+    local sources=0
+    local temp_merged="/tmp/merged-$$"
+    
+    # Merge available sources
+    if [ -f "$EXIT_NODES_FILE.dan" ]; then
+        cat "$EXIT_NODES_FILE.dan" >> "$temp_merged"
+        ((sources++))
+    fi
+    
+    if [ -f "$EXIT_NODES_FILE.github" ]; then
+        cat "$EXIT_NODES_FILE.github" >> "$temp_merged"
+        ((sources++))
+    fi
+    
+    if [ $sources -eq 0 ]; then
+        log_message "$RED ✗ No valid sources available$RESETCOLOR"
+        rm -f "$temp_merged"
+        return 1
+    fi
+    
+    # Sort and deduplicate
+    sort -u "$temp_merged" > "$EXIT_NODES_FILE.new"
+    
+    local new_count=$(wc -l < "$EXIT_NODES_FILE.new")
+    local old_count=0
+    [ -f "$EXIT_NODES_FILE" ] && old_count=$(wc -l < "$EXIT_NODES_FILE")
+    
+    # Sanity check - don't update if new list is suspiciously small
+    if [ $new_count -lt 100 ]; then
+        log_message "$RED ✗ New list too small ($new_count nodes), keeping old list$RESETCOLOR"
+        rm -f "$temp_merged" "$EXIT_NODES_FILE.new"
+        return 1
+    fi
+    
+    # Check for major changes (more than 50% difference)
+    if [ $old_count -gt 0 ]; then
+        local diff=$((new_count - old_count))
+        [ $diff -lt 0 ] && diff=$((diff * -1))
+        local percent=$((diff * 100 / old_count))
+        
+        if [ $percent -gt 50 ]; then
+            log_message "$YELLOW ⚠ Major change detected: $old_count -> $new_count nodes ($percent% change)$RESETCOLOR"
+        fi
+    fi
+    
+    # Backup old file and update
+    [ -f "$EXIT_NODES_FILE" ] && cp "$EXIT_NODES_FILE" "$EXIT_NODES_FILE.bak"
+    mv "$EXIT_NODES_FILE.new" "$EXIT_NODES_FILE"
+    
+    log_message "$GREEN ✓ Updated exit nodes: $new_count unique IPs from $sources sources$RESETCOLOR"
+    
+    # Update ipset if available
+    if command -v ipset > /dev/null 2>&1; then
+        update_ipset
+    fi
+    
+    # Clean up temporary files
+    rm -f "$temp_merged" "$EXIT_NODES_FILE.dan" "$EXIT_NODES_FILE.github"
+    
+    return 0
+}
+
+function update_ipset {
+    log_message "$BLUE Updating ipset...$RESETCOLOR"
+    
+    # Create or clear ipset
+    ipset create tor-exits hash:ip -exist 2>/dev/null
+    ipset create tor-exits-new hash:ip -exist 2>/dev/null
+    ipset flush tor-exits-new 2>/dev/null
+    
+    # Load new IPs
+    local loaded=0
+    while IFS= read -r ip; do
+        if ipset add tor-exits-new "$ip" -exist 2>/dev/null; then
+            ((loaded++))
+        fi
+    done < "$EXIT_NODES_FILE"
+    
+    # Swap sets atomically
+    ipset swap tor-exits-new tor-exits 2>/dev/null
+    ipset destroy tor-exits-new 2>/dev/null
+    
+    log_message "$GREEN ✓ Loaded $loaded IPs into ipset$RESETCOLOR"
+}
+
+function verify_random_nodes {
+    log_message "$BLUE Verifying random sample of nodes...$RESETCOLOR"
+    
+    if [ ! -f "$EXIT_NODES_FILE" ]; then
+        return 1
+    fi
+    
+    # Select 5 random IPs to verify
+    local sample=$(shuf -n 5 "$EXIT_NODES_FILE" 2>/dev/null)
+    local verified=0
+    local tested=0
+    
+    for ip in $sample; do
+        ((tested++))
+        local reversed=$(echo "$ip" | awk -F. '{print $4"."$3"."$2"."$1}')
+        
+        if host -W 2 "${reversed}.torexit.dan.me.uk" 2>/dev/null | grep -q "127.0.0.100"; then
+            ((verified++))
+        elif host -W 2 "${reversed}.dnsel.torproject.org" 2>/dev/null | grep -q "127.0.0.2"; then
+            ((verified++))
+        fi
+    done
+    
+    if [ $tested -gt 0 ]; then
+        local percent=$((verified * 100 / tested))
+        log_message "$BLUE Verification: $verified/$tested nodes confirmed ($percent%)$RESETCOLOR"
+        
+        if [ $percent -lt 50 ]; then
+            log_message "$YELLOW ⚠ Low verification rate may indicate stale data$RESETCOLOR"
+        fi
+    fi
+}
+
+function cleanup_old_files {
+    # Remove files older than 7 days
+    find "$CERBERUS_CACHE" -name "*.bak" -mtime +7 -delete 2>/dev/null
+    find "$CERBERUS_LOGS" -name "*.log" -mtime +30 -delete 2>/dev/null
+    
+    # Rotate log if too large (>10MB)
+    if [ -f "$UPDATE_LOG" ] && [ $(stat -c%s "$UPDATE_LOG" 2>/dev/null || echo 0) -gt 10485760 ]; then
+        mv "$UPDATE_LOG" "$UPDATE_LOG.old"
+        gzip "$UPDATE_LOG.old"
+        log_message "$BLUE Log rotated$RESETCOLOR"
+    fi
+}
+
+function main {
+    log_message "$GREEN===== Cerberus Node Updater Started =====$RESETCOLOR"
+    
+    # Check for root if updating ipset
+    if command -v ipset > /dev/null 2>&1 && [ $(id -u) -ne 0 ]; then
+        log_message "$YELLOW ⚠ Running as non-root, ipset updates disabled$RESETCOLOR"
+    fi
+    
+    # Fetch from sources in parallel
+    fetch_dan_exit_nodes &
+    PID1=$!
+    fetch_github_nodes &
+    PID2=$!
+    fetch_all_nodes &
+    PID3=$!
+    
+    # Wait for all fetches to complete
+    wait $PID1 $PID2 $PID3
+    
+    # Validate and merge
+    if validate_and_merge; then
+        verify_random_nodes
+        cleanup_old_files
+        log_message "$GREEN ✓ Update completed successfully$RESETCOLOR"
+        exit 0
+    else
+        log_message "$RED ✗ Update failed$RESETCOLOR"
+        exit 1
+    fi
+}
+
+# Handle arguments
+case "$1" in
+    --daemon)
+        # Run continuously
+        while true; do
+            main
+            sleep 1800  # Update every 30 minutes
+        done
+    ;;
+    --once|"")
+        main
+    ;;
+    --verify)
+        verify_random_nodes
+    ;;
+    --status)
+        if [ -f "$EXIT_NODES_FILE" ]; then
+            echo -e "$GREEN Exit nodes: $(wc -l < $EXIT_NODES_FILE)$RESETCOLOR"
+            echo -e "$BLUE Last update: $(stat -c %y $EXIT_NODES_FILE | cut -d'.' -f1)$RESETCOLOR"
+            [ -f "$ALL_NODES_FILE" ] && echo -e "$BLUE Total nodes: $(wc -l < $ALL_NODES_FILE)$RESETCOLOR"
+        else
+            echo -e "$RED No node database found$RESETCOLOR"
+        fi
+    ;;
+    *)
+        echo "Usage: $0 [--daemon|--once|--verify|--status]"
+        echo "  --daemon  Run continuously (updates every 30 minutes)"
+        echo "  --once    Run once and exit (default)"
+        echo "  --verify  Verify random sample of nodes"
+        echo "  --status  Show database status"
+        exit 1
+    ;;
+esac
