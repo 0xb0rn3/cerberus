@@ -10,6 +10,8 @@ ExecStart=/usr/bin/cerberus-updater --once
 User=root
 StandardOutput=journal
 StandardError=journal
+TimeoutSec=300
+Restart=no
 
 [Install]
 WantedBy=multi-user.target
@@ -25,6 +27,7 @@ Requires=cerberus-updater.service
 OnBootSec=5min
 OnUnitActiveSec=30min
 Persistent=true
+RandomizedDelaySec=300
 
 [Install]
 WantedBy=timers.target
@@ -46,6 +49,8 @@ ExecStop=/usr/bin/cerberus stop
 ExecReload=/usr/bin/cerberus restart
 StandardOutput=journal
 StandardError=journal
+TimeoutStartSec=120
+TimeoutStopSec=60
 
 [Install]
 WantedBy=multi-user.target
@@ -69,3 +74,22 @@ StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
+
+---
+
+# cerberus-pandora.service
+[Unit]
+Description=Cerberus Pandora RAM cleaner
+After=umount.target
+Before=shutdown.target reboot.target halt.target
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+ExecStart=/bin/true
+ExecStop=/usr/bin/cerberus-pandora bomb
+TimeoutStopSec=30
+
+[Install]
+WantedBy=shutdown.target
